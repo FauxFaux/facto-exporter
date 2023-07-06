@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use anyhow::Result;
 use anyhow::{anyhow, bail};
-use anyhow::{Context, Result};
 use archiv::{Compress, CompressStream};
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
@@ -22,7 +22,8 @@ const DR1: *mut c_void = 856 as *mut c_void;
 const DR6: *mut c_void = 896 as *mut c_void;
 const DR7: *mut c_void = 904 as *mut c_void;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let mut archiv =
         archiv::CompressOptions::default().stream_compress(fs::File::create(path_for_now())?)?;
     assert_eq!(std::mem::size_of::<c_long>(), 8);
@@ -135,7 +136,7 @@ fn body(
 
     let mut buf = Vec::with_capacity(64 + lites.len() * 8);
     buf.write_all(&OffsetDateTime::now_utc().unix_timestamp().to_le_bytes())?;
-    for lite in lites {
+    for lite in &lites {
         buf.write_all(&lite.unit_number.to_le_bytes())?;
         buf.write_all(&lite.products_complete.to_le_bytes())?;
     }

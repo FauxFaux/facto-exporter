@@ -17,6 +17,8 @@ use nix::unistd::Pid;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use facto_exporter::CraftingLite;
+
 const DR0: *mut c_void = 848 as *mut c_void;
 const DR1: *mut c_void = 856 as *mut c_void;
 const DR6: *mut c_void = 896 as *mut c_void;
@@ -145,12 +147,6 @@ fn body(
     archiv.flush()?;
 
     Ok(Some(lites))
-}
-
-#[derive(Debug)]
-struct CraftingLite {
-    unit_number: u32,
-    products_complete: u32,
 }
 
 fn read_crafting_lite(pid: Pid, ptr: u64) -> Result<CraftingLite> {

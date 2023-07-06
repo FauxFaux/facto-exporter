@@ -1,0 +1,10 @@
+[package]
+name = "facto-exporter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+elf = "0.7"
+memchr = "2.5.0"
+nix = { version = "0.26", features = ["ptrace"] }

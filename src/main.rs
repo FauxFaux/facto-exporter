@@ -1,16 +1,30 @@
 use std::ffi::c_void;
+use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 use anyhow::{Context, Result};
+use archiv::{Compress, CompressStream};
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use nix::libc::c_long;
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
+
+const DR0: *mut c_void = 848 as *mut c_void;
+const DR1: *mut c_void = 856 as *mut c_void;
+const DR6: *mut c_void = 896 as *mut c_void;
+const DR7: *mut c_void = 904 as *mut c_void;
 
 fn main() -> Result<()> {
+    let mut archiv =
+        archiv::CompressOptions::default().stream_compress(fs::File::create(path_for_now())?)?;
     assert_eq!(std::mem::size_of::<c_long>(), 8);
     let bin_path = std::fs::canonicalize(
         std::env::args_os()
@@ -33,10 +47,8 @@ fn main() -> Result<()> {
     ptrace::attach(game_update)?;
     waitpid(game_update, Some(WaitPidFlag::WSTOPPED))?;
 
-    const DR0: *mut c_void = 848 as *mut c_void;
-    const DR1: *mut c_void = 856 as *mut c_void;
-    const DR6: *mut c_void = 896 as *mut c_void;
-    const DR7: *mut c_void = 904 as *mut c_void;
+    let term = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
 
     unsafe {
         ptrace::write_user(game_update, DR0, crafting_insert as *mut c_void)?;
@@ -48,49 +60,33 @@ fn main() -> Result<()> {
         ptrace::write_user(game_update, DR7, dr7 as *mut c_void)?;
     }
 
+    println!("debugging, waiting for an assembler place...");
+
     let mut hits = 0;
 
-    let mut set_base = 0;
+    let mut state = BodyState {
+        game_update,
+        set_base: 0,
+        hits: 0,
+    };
 
-    ptrace::cont(game_update, None)?;
-    loop {
+    while !term.load(Ordering::Relaxed) {
+        ptrace::cont(game_update, None)?;
         let status = waitpid(game_update, Some(WaitPidFlag::WSTOPPED))?;
         match status {
             WaitStatus::Stopped(_, _) => (),
             _ => continue,
         };
 
-        let regs = ptrace::getregs(game_update).with_context(|| anyhow!("{status:?}"))?;
-
-        let dr6 = ptrace::read_user(game_update, DR6)?;
-
-        if dr6 & 0b1 == 1 {
-            println!(
-                "hit place: old base: {set_base:x}, new base: {:x}",
-                regs.rdi
-            );
-            set_base = regs.rdi;
-        }
-
-        hits += 1;
-        if hits == 60 * 10 {
+        if let Err(e) = body(&mut state, &mut archiv) {
+            println!("fatal error: {:?}", e);
             break;
         }
-
-        if hits % 60 == 0 {
-            if set_base != 0 {
-                println!(
-                    "walked {:?} items",
-                    walk_set_u64(game_update, set_base)?.len()
-                );
-                for data_ptr in walk_set_u64(game_update, set_base)? {
-                    println!(" * {:?}", read_crafting_lite(game_update, data_ptr)?);
-                }
-            }
-        }
-
-        ptrace::cont(game_update, None)?;
     }
+
+    println!("detaching...");
+
+    archiv.finish()?.flush()?;
 
     unsafe {
         let mut dr7 = ptrace::read_user(game_update, DR7)?;
@@ -99,6 +95,48 @@ fn main() -> Result<()> {
     }
 
     ptrace::detach(game_update, None)?;
+
+    Ok(())
+}
+
+struct BodyState {
+    game_update: Pid,
+    set_base: u64,
+    hits: u64,
+}
+
+fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<()> {
+    let regs = ptrace::getregs(state.game_update)?;
+
+    let dr6 = ptrace::read_user(state.game_update, DR6)?;
+
+    if dr6 & 0b1 == 1 {
+        println!(
+            "hit place: old base: {:x}, new base: {:x}",
+            state.set_base, regs.rdi
+        );
+        state.set_base = regs.rdi;
+    }
+
+    state.hits += 1;
+
+    if state.hits % 60 != 0 {
+        return Ok(());
+    }
+    if state.set_base == 0 {
+        return Ok(());
+    }
+    let addresses = walk_set_u64(state.game_update, state.set_base)?;
+    let mut buf = Vec::with_capacity(64 + addresses.len() * 8);
+    buf.write_all(&OffsetDateTime::now_utc().unix_timestamp().to_le_bytes())?;
+    println!("walked {:?} items", addresses.len());
+    for data_ptr in addresses {
+        let lite = read_crafting_lite(state.game_update, data_ptr)?;
+        buf.write_all(&lite.unit_number.to_le_bytes())?;
+        buf.write_all(&lite.products_complete.to_le_bytes())?;
+    }
+
+    archiv.write_item(&buf)?;
 
     Ok(())
 }
@@ -168,7 +206,7 @@ fn dump(mem: &[u8], addr: u64) -> Result<()> {
 }
 
 fn find_symbol(bin_path: impl AsRef<Path>, symbol: &str) -> Result<(u64, usize)> {
-    let f = std::fs::read(bin_path)?;
+    let f = fs::read(bin_path)?;
     let f = f.as_slice();
     let f = ElfBytes::<AnyEndian>::minimal_parse(f)?;
 
@@ -236,4 +274,11 @@ fn find_thread(pid: i32, name: &str) -> Result<i32> {
         }
     }
     bail!("thread not found");
+}
+
+fn path_for_now() -> String {
+    let time = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("static formatter");
+    format!("{}.facto-cp.archiv", time)
 }

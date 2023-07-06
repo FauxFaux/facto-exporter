@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+archiv = "0.1.1"
 anyhow = "1"
 elf = "0.7"
 memchr = "2.5.0"
 nix = { version = "0.26", features = ["ptrace"] }
+time = { version = "0.3", features = ["formatting"] }
+signal-hook = "0.3.15"

@@ -62,8 +62,6 @@ fn main() -> Result<()> {
 
     println!("debugging, waiting for an assembler place...");
 
-    let mut hits = 0;
-
     let mut state = BodyState {
         game_update,
         set_base: 0,
@@ -105,7 +103,10 @@ struct BodyState {
     hits: u64,
 }
 
-fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<()> {
+fn body(
+    state: &mut BodyState,
+    archiv: &mut CompressStream<fs::File>,
+) -> Result<Option<Vec<CraftingLite>>> {
     let regs = ptrace::getregs(state.game_update)?;
 
     let dr6 = ptrace::read_user(state.game_update, DR6)?;
@@ -121,24 +122,28 @@ fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<
     state.hits += 1;
 
     if state.hits % 60 != 0 {
-        return Ok(());
+        return Ok(None);
     }
     if state.set_base == 0 {
-        return Ok(());
+        return Ok(None);
     }
-    let addresses = walk_set_u64(state.game_update, state.set_base)?;
-    let mut buf = Vec::with_capacity(64 + addresses.len() * 8);
+    let mut lites = walk_set_u64(state.game_update, state.set_base)?
+        .into_iter()
+        .map(|ptr| read_crafting_lite(state.game_update, ptr))
+        .collect::<Result<Vec<CraftingLite>>>()?;
+    lites.sort_unstable_by_key(|lite| lite.unit_number);
+
+    let mut buf = Vec::with_capacity(64 + lites.len() * 8);
     buf.write_all(&OffsetDateTime::now_utc().unix_timestamp().to_le_bytes())?;
-    println!("walked {:?} items", addresses.len());
-    for data_ptr in addresses {
-        let lite = read_crafting_lite(state.game_update, data_ptr)?;
+    for lite in lites {
         buf.write_all(&lite.unit_number.to_le_bytes())?;
         buf.write_all(&lite.products_complete.to_le_bytes())?;
     }
 
     archiv.write_item(&buf)?;
+    archiv.flush()?;
 
-    Ok(())
+    Ok(Some(lites))
 }
 
 #[derive(Debug)]

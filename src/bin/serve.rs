@@ -1,14 +1,12 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{ensure, Result};
 use axum::body::Bytes;
 use axum::extract::State;
-use bytes::Buf;
 use reqwest::StatusCode;
 use std::io::Read;
 use std::sync::Arc;
 use std::{fs, io};
-use time::OffsetDateTime;
 
-use facto_exporter::{CraftingLite, Observation};
+use facto_exporter::{unpack_observation, Observation};
 
 struct Data {
     inner: Vec<Observation>,
@@ -37,17 +35,20 @@ async fn main() -> Result<()> {
         let mut archiv = archiv::ExpandOptions::default()
             .stream(io::BufReader::new(fs::File::open(path.file_name())?))?;
 
+        let mut bytes = Vec::with_capacity(10 * 1024);
         while let Some(mut item) = archiv.next_item()? {
-            let mut bytes = Vec::with_capacity(10 * 1024);
             item.read_to_end(&mut bytes)?;
-            data.inner.push(parse_observation(Bytes::from(bytes))?);
+            data.inner
+                .push(unpack_observation(io::Cursor::new(&bytes))?);
+            bytes.clear();
         }
     }
 
     use axum::routing::*;
     let app = axum::Router::new()
         .route("/", get(|| async { env!("CARGO_PKG_NAME") }))
-        .route("/healthcheck", get(|| async { r#"{ "status": "ok" }"# }))
+        .route("/healthcheck", get(|| async { "ok" }))
+        .route("/metrics/raw", get(metrics_raw))
         .route("/exp/store", post(store))
         .with_state(AppState {
             data: Arc::new(tokio::sync::Mutex::new(data)),
@@ -61,7 +62,9 @@ async fn main() -> Result<()> {
 
 #[axum::debug_handler]
 async fn store(State(state): State<AppState>, buf: Bytes) -> StatusCode {
-    let observation = match parse_observation(buf) {
+    // TODO: less copying / unbounded memory usage?
+    let buf = buf.to_vec();
+    let observation = match unpack_observation(io::Cursor::new(buf)) {
         Ok(observation) => observation,
         Err(err) => {
             eprintln!("error parsing observation: {}", err);
@@ -74,32 +77,21 @@ async fn store(State(state): State<AppState>, buf: Bytes) -> StatusCode {
     StatusCode::ACCEPTED
 }
 
-fn parse_observation(mut buf: Bytes) -> Result<Observation> {
-    ensure!(buf.remaining() >= 16, "lacks header");
-    let records = buf.get_u64_le();
-    let time = OffsetDateTime::from_unix_timestamp(buf.get_i64_le())?;
-    ensure!(
-        records < u32::MAX as u64,
-        "implausible records number: {records}"
-    );
-    ensure!(
-        buf.remaining()
-            == usize::try_from(records)?
-                .checked_mul(8)
-                .ok_or_else(|| anyhow!("overflow in records number: {records}"))?,
-        "invalid length: {} for {records}",
-        buf.remaining()
-    );
+#[axum::debug_handler]
+async fn metrics_raw(State(state): State<AppState>) -> String {
+    let data = state.data.lock().await;
+    let data = match data.inner.last() {
+        Some(data) => data,
+        None => return String::new(),
+    };
 
-    let mut inner = Vec::with_capacity(records.min(4096) as usize);
-    for _ in 0..records {
-        inner.push(CraftingLite {
-            unit_number: buf.get_u32_le(),
-            products_complete: buf.get_u32_le(),
-        });
+    let mut s = String::with_capacity(data.inner.len() * 50);
+    for crafting in &data.inner {
+        s.push_str(&format!(
+            "facto_products_complete{{unit=\"{}\"}} {}\n",
+            crafting.unit_number, crafting.products_complete,
+        ));
     }
 
-    assert_eq!(buf.remaining(), 0, "parser dumbness");
-
-    Ok(Observation { time, inner })
+    s
 }

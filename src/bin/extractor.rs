@@ -14,10 +14,11 @@ use nix::libc::c_long;
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use reqwest::StatusCode;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use facto_exporter::CraftingLite;
+use facto_exporter::{pack_observation, CraftingLite, Observation};
 
 const DR0: *mut c_void = 848 as *mut c_void;
 const DR1: *mut c_void = 856 as *mut c_void;
@@ -106,10 +107,7 @@ struct BodyState {
     hits: u64,
 }
 
-fn body(
-    state: &mut BodyState,
-    archiv: &mut CompressStream<fs::File>,
-) -> Result<Option<Vec<CraftingLite>>> {
+fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<()> {
     let regs = ptrace::getregs(state.game_update)?;
 
     let dr6 = ptrace::read_user(state.game_update, DR6)?;
@@ -125,10 +123,10 @@ fn body(
     state.hits += 1;
 
     if state.hits % 60 != 0 {
-        return Ok(None);
+        return Ok(());
     }
     if state.set_base == 0 {
-        return Ok(None);
+        return Ok(());
     }
     let mut lites = walk_set_u64(state.game_update, state.set_base)?
         .into_iter()
@@ -136,17 +134,30 @@ fn body(
         .collect::<Result<Vec<CraftingLite>>>()?;
     lites.sort_unstable_by_key(|lite| lite.unit_number);
 
-    let mut buf = Vec::with_capacity(64 + lites.len() * 8);
-    buf.write_all(&OffsetDateTime::now_utc().unix_timestamp().to_le_bytes())?;
-    for lite in &lites {
-        buf.write_all(&lite.unit_number.to_le_bytes())?;
-        buf.write_all(&lite.products_complete.to_le_bytes())?;
-    }
+    let obs = Observation {
+        time: OffsetDateTime::now_utc(),
+        inner: lites,
+    };
 
-    archiv.write_item(&buf)?;
+    let packed = pack_observation(&obs)?;
+    archiv.write_item(&packed)?;
     archiv.flush()?;
 
-    Ok(Some(lites))
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let res = client
+            .post("http://localhost:9429/exp/store")
+            .body(packed)
+            .send()
+            .await;
+        match res {
+            Ok(res) if res.status() == StatusCode::ACCEPTED => (),
+            Ok(res) => eprintln!("surprising send response: {:?}", res),
+            Err(e) => eprintln!("send error: {:?}", e),
+        }
+    });
+
+    Ok(())
 }
 
 fn read_crafting_lite(pid: Pid, ptr: u64) -> Result<CraftingLite> {

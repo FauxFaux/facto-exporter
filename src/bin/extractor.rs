@@ -71,6 +71,10 @@ async fn main() -> Result<()> {
     let mut state = BodyState {
         game_update,
         set_base: 0,
+        // these are internally consistent, even though they're nonsense
+        // I don't really care about games with no assemblers
+        set_size: 0,
+        set_data: Vec::new(),
         hits: 0,
     };
 
@@ -101,7 +105,6 @@ async fn main() -> Result<()> {
         let packed = pack_observation(&obs)?;
         let packed2 = packed.clone();
 
-        println!("packed {} bytes in {:?}", packed.len(), start.elapsed());
         let term = Arc::clone(&term);
         let archiv = Arc::clone(&archiv);
         // i.e. go back around the loop and continue doing nothing while this is writing
@@ -112,7 +115,6 @@ async fn main() -> Result<()> {
                 // only none during cleanup
                 None => return,
             };
-            println!("locked in {:?}", start.elapsed());
             let mut tried = || -> Result<()> {
                 archiv.write_item(&packed)?;
                 archiv.flush()?;
@@ -122,7 +124,6 @@ async fn main() -> Result<()> {
                 eprintln!("archiv error: {:?}", e);
                 term.store(true, Ordering::SeqCst);
             }
-            println!("written in {:?}", start.elapsed());
         });
 
         tokio::spawn(async move {
@@ -167,6 +168,9 @@ async fn main() -> Result<()> {
 struct BodyState {
     game_update: Pid,
     set_base: u64,
+    // re-read the data iff there's an insert, or the size has changed
+    set_size: u64,
+    set_data: Vec<u64>,
     hits: u64,
 }
 
@@ -181,19 +185,29 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
             state.set_base, regs.rdi
         );
         state.set_base = regs.rdi;
+        // we can't update the actual data here, 'cos we know it is just about to change,
+        // just leave this as "before" data, so the next tick re-reads the full data
+        state.set_size = read_set_size(state)?;
     }
 
     state.hits += 1;
 
-    if state.hits % 60 != 0 {
+    // only work every 15 game seconds (15 real seconds at 60UPS)
+    if state.hits % (60 * 15) != 0 {
         return Ok(None);
     }
     if state.set_base == 0 {
         return Ok(None);
     }
-    let mut lites = walk_set_u64(state.game_update, state.set_base)?
-        .into_iter()
-        .map(|ptr| read_crafting_lite(state.game_update, ptr))
+
+    if state.set_size != read_set_size(state)? {
+        read_set(state)?;
+    }
+
+    let mut lites = state
+        .set_data
+        .iter()
+        .map(|&ptr| read_crafting_lite(state.game_update, ptr))
         .collect::<Result<Vec<CraftingLite>>>()?;
     lites.sort_unstable_by_key(|lite| lite.unit_number);
 
@@ -201,6 +215,20 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
         time: OffsetDateTime::now_utc(),
         inner: lites,
     }))
+}
+
+fn read_set(state: &mut BodyState) -> Result<()> {
+    if state.set_base == 0 {
+        return Ok(());
+    }
+    state.set_size = read_set_size(state)?;
+    state.set_data = walk_set_u64(state.game_update, state.set_base)?;
+    Ok(())
+}
+
+fn read_set_size(state: &BodyState) -> Result<u64> {
+    let [size] = bulk_read_ptr(state.game_update, state.set_base + 40)?;
+    Ok(size)
 }
 
 fn read_crafting_lite(pid: Pid, ptr: u64) -> Result<CraftingLite> {

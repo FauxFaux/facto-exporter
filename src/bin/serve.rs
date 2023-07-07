@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::{fs, io};
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -119,8 +119,11 @@ async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
 
 #[derive(serde::Deserialize)]
 struct QueryQuery {
-    // unix seconds
-    start: Option<i64>,
+    // number of observations to return, default 30
+    steps: Option<u32>,
+    // number of seconds between each observation, default 60
+    gap: Option<u32>,
+    // unix seconds, default now()
     end: Option<i64>,
     // Vec<u32> csv
     units: String,
@@ -148,22 +151,41 @@ async fn query(
 
     units.sort_unstable();
 
-    let start = query.start.unwrap_or(0);
     let end = query
         .end
         .unwrap_or_else(|| OffsetDateTime::now_utc().unix_timestamp());
 
+    let steps = query.steps.unwrap_or(30);
+    let gap = query.gap.unwrap_or(60);
+
     okay_or_500(&state.logger, || async {
         let data = state.data.lock().await;
 
-        let obses = data
+        ensure!(!data.inner.is_empty(), "no data");
+
+        let all_obses = data
             .inner
             .iter()
-            .filter(|obs| {
-                let when = obs.time.unix_timestamp();
-                when >= start && when <= end
-            })
+            .map(|obs| obs.time.unix_timestamp())
             .collect::<Vec<_>>();
+
+        // find the nearest ones for our chosen steps
+        let mut obses = Vec::with_capacity(steps as usize);
+        for step in 0..steps {
+            let target = end - (step * gap) as i64;
+            let best = match all_obses.binary_search(&target) {
+                Ok(a) => a,
+                Err(a) => a,
+            };
+
+            obses.push(
+                data.inner
+                    .get(best)
+                    .unwrap_or_else(|| data.inner.last().expect("non-empty observations")),
+            );
+        }
+
+        obses.reverse();
 
         let times = obses
             .iter()
@@ -172,7 +194,7 @@ async fn query(
 
         let mut deltas = Vec::with_capacity(units.len());
         for _ in &units {
-            deltas.push(Vec::with_capacity(obses.len()));
+            deltas.push(Vec::with_capacity(all_obses.len()));
         }
 
         for obs in obses {

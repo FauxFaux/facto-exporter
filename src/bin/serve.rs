@@ -1,11 +1,16 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::{fs, io};
 
 use anyhow::Result;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use bunyarrs::{vars, vars_dbg};
+use axum::response::IntoResponse;
+use axum::Json;
+use bunyarrs::{vars, vars_dbg, Bunyarr};
+use serde_json::{json, Value};
+use time::OffsetDateTime;
 
 use facto_exporter::{unpack_observation, Observation};
 
@@ -13,9 +18,9 @@ struct Data {
     inner: Vec<Observation>,
 }
 
-#[derive(Clone)]
 struct AppState {
     data: Arc<tokio::sync::Mutex<Data>>,
+    logger: Bunyarr,
 }
 
 #[tokio::main]
@@ -62,9 +67,11 @@ async fn main() -> Result<()> {
         .route("/healthcheck", get(|| async { "ok" }))
         .route("/metrics/raw", get(metrics_raw))
         .route("/exp/store", post(store))
-        .with_state(AppState {
+        .route("/api/query", get(query))
+        .with_state(Arc::new(AppState {
             data: Arc::new(tokio::sync::Mutex::new(data)),
-        });
+            logger: Bunyarr::with_name("handler"),
+        }));
 
     let port = 9429;
     logger.info(vars! { port }, "starting server");
@@ -75,7 +82,7 @@ async fn main() -> Result<()> {
 }
 
 #[axum::debug_handler]
-async fn store(State(state): State<AppState>, buf: Bytes) -> StatusCode {
+async fn store(State(state): State<Arc<AppState>>, buf: Bytes) -> StatusCode {
     // TODO: less copying / unbounded memory usage?
     let buf = buf.to_vec();
     let observation = match unpack_observation(io::Cursor::new(buf)) {
@@ -92,7 +99,7 @@ async fn store(State(state): State<AppState>, buf: Bytes) -> StatusCode {
 }
 
 #[axum::debug_handler]
-async fn metrics_raw(State(state): State<AppState>) -> String {
+async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
     let data = state.data.lock().await;
     let data = match data.inner.last() {
         Some(data) => data,
@@ -108,4 +115,112 @@ async fn metrics_raw(State(state): State<AppState>) -> String {
     }
 
     s
+}
+
+#[derive(serde::Deserialize)]
+struct QueryQuery {
+    // unix seconds
+    start: Option<i64>,
+    end: Option<i64>,
+    // Vec<u32> csv
+    units: String,
+}
+
+#[axum::debug_handler]
+async fn query(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<QueryQuery>,
+) -> impl IntoResponse {
+    let mut units = match query
+        .units
+        .split(',')
+        .map(|s| -> Result<u32> { Ok(s.parse::<u32>()?) })
+        .collect::<Result<Vec<u32>>>()
+    {
+        Ok(units) => units,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid units" })),
+            )
+        }
+    };
+
+    units.sort_unstable();
+
+    let start = query.start.unwrap_or(0);
+    let end = query
+        .end
+        .unwrap_or_else(|| OffsetDateTime::now_utc().unix_timestamp());
+
+    okay_or_500(&state.logger, || async {
+        let data = state.data.lock().await;
+
+        let obses = data
+            .inner
+            .iter()
+            .filter(|obs| {
+                let when = obs.time.unix_timestamp();
+                when >= start && when <= end
+            })
+            .collect::<Vec<_>>();
+
+        let times = obses
+            .iter()
+            .map(|obs| obs.time.unix_timestamp())
+            .collect::<Vec<_>>();
+
+        let mut deltas = Vec::with_capacity(units.len());
+        for _ in &units {
+            deltas.push(Vec::with_capacity(obses.len()));
+        }
+
+        for obs in obses {
+            assert_eq!(deltas.len(), units.len());
+            for (by_unit, unit) in deltas.iter_mut().zip(units.iter()) {
+                if let Ok(found) = obs
+                    .inner
+                    .binary_search_by_key(&unit, |crafting| &crafting.unit_number)
+                {
+                    let crafting = &obs.inner[found];
+                    by_unit.push(Some(crafting.products_complete));
+                } else {
+                    by_unit.push(None);
+                }
+            }
+        }
+
+        let deltas = deltas
+            .into_iter()
+            .map(|deltas| {
+                deltas
+                    .iter()
+                    .zip(deltas.iter().skip(1))
+                    .map(|(a, b)| match (a, b) {
+                        (Some(a), Some(b)) => b.checked_sub(*a),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        Ok(json!({ "units": units, "deltas": deltas, "times": times }))
+    })
+    .await
+}
+
+async fn okay_or_500<F: Future<Output = Result<Value>>>(
+    logger: &Bunyarr,
+    func: impl FnOnce() -> F,
+) -> (StatusCode, Json<Value>) {
+    match func().await {
+        Ok(resp) => (StatusCode::OK, Json(resp)),
+        Err(err) => {
+            logger.error(vars_dbg!(err), "error handling request");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal server error "})),
+            )
+        }
+    }
 }

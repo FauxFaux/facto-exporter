@@ -17,5 +17,5 @@ reqwest = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
-time = { version = "0.3", features = ["formatting", "serde"] }
+time = { version = "0.3", features = ["formatting", "serde", "parsing"] }
 tokio = { version = "1.29", features = ["full"] }

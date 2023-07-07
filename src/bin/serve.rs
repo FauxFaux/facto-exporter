@@ -1,10 +1,11 @@
-use anyhow::{ensure, Result};
-use axum::body::Bytes;
-use axum::extract::State;
-use reqwest::StatusCode;
-use std::io::Read;
 use std::sync::Arc;
 use std::{fs, io};
+
+use anyhow::Result;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::StatusCode;
+use bunyarrs::{vars, vars_dbg};
 
 use facto_exporter::{unpack_observation, Observation};
 
@@ -19,6 +20,8 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let logger = bunyarrs::Bunyarr::with_name("serve");
+
     let mut data = Data {
         inner: Vec::with_capacity(256),
     };
@@ -32,20 +35,29 @@ async fn main() -> Result<()> {
         {
             continue;
         }
-        let mut archiv = archiv::ExpandOptions::default()
-            .stream(io::BufReader::new(fs::File::open(path.file_name())?))?;
+        let path = path.path();
+        logger.info(vars! { path }, "loading observation");
+        let mut archiv =
+            archiv::ExpandOptions::default().stream(io::BufReader::new(fs::File::open(path)?))?;
 
-        let mut bytes = Vec::with_capacity(10 * 1024);
-        while let Some(mut item) = archiv.next_item()? {
-            item.read_to_end(&mut bytes)?;
-            data.inner
-                .push(unpack_observation(io::Cursor::new(&bytes))?);
-            bytes.clear();
+        loop {
+            let item = match archiv.next_item() {
+                Err(err) => {
+                    logger.warn(
+                        vars_dbg! { err },
+                        "failed to read item, assuming live archive",
+                    );
+                    break;
+                }
+                Ok(None) => break,
+                Ok(Some(item)) => item,
+            };
+            data.inner.push(unpack_observation(item)?);
         }
     }
 
     use axum::routing::*;
-    let app = axum::Router::new()
+    let app = Router::new()
         .route("/", get(|| async { env!("CARGO_PKG_NAME") }))
         .route("/healthcheck", get(|| async { "ok" }))
         .route("/metrics/raw", get(metrics_raw))
@@ -54,7 +66,9 @@ async fn main() -> Result<()> {
             data: Arc::new(tokio::sync::Mutex::new(data)),
         });
 
-    axum::Server::bind(&([127, 0, 0, 1], 9429).into())
+    let port = 9429;
+    logger.info(vars! { port }, "starting server");
+    axum::Server::bind(&([127, 0, 0, 1], port).into())
         .serve(app.into_make_service())
         .await?;
     Ok(())

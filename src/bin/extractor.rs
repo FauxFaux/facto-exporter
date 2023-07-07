@@ -1,13 +1,14 @@
 use std::ffi::c_void;
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+use std::{fs, thread};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
-use archiv::{Compress, CompressStream};
+use archiv::Compress;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use nix::libc::c_long;
@@ -27,8 +28,9 @@ const DR7: *mut c_void = 904 as *mut c_void;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut archiv =
-        archiv::CompressOptions::default().stream_compress(fs::File::create(path_for_now())?)?;
+    let archiv = Arc::new(std::sync::Mutex::new(Some(
+        archiv::CompressOptions::default().stream_compress(fs::File::create(path_for_now())?)?,
+    )));
     assert_eq!(std::mem::size_of::<c_long>(), 8);
     let bin_path = std::fs::canonicalize(
         std::env::args_os()
@@ -72,7 +74,9 @@ async fn main() -> Result<()> {
         hits: 0,
     };
 
-    while !term.load(Ordering::Relaxed) {
+    // this whole loop is horribly unsafe; the cleanup is afterwards,
+    // and can't be run unless then process is stopped, so you can't break or error
+    while !term.load(Ordering::SeqCst) {
         ptrace::cont(game_update, None)?;
         let status = waitpid(game_update, Some(WaitPidFlag::WSTOPPED))?;
         match status {
@@ -80,23 +84,82 @@ async fn main() -> Result<()> {
             _ => continue,
         };
 
-        if let Err(e) = body(&mut state, &mut archiv) {
-            println!("fatal error: {:?}", e);
-            break;
-        }
+        let start = Instant::now();
+        let obs = match observe(&mut state) {
+            Ok(Some(obs)) => {
+                println!("observed in {:?}", start.elapsed());
+                obs
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                println!("error: {:?}", e);
+                break;
+            }
+        };
+
+        // this is just bincode, so pretty much can't fail (right?)
+        let packed = pack_observation(&obs)?;
+        let packed2 = packed.clone();
+
+        println!("packed {} bytes in {:?}", packed.len(), start.elapsed());
+        let term = Arc::clone(&term);
+        let archiv = Arc::clone(&archiv);
+        // i.e. go back around the loop and continue doing nothing while this is writing
+        thread::spawn(move || {
+            let mut archiv = archiv.lock().expect("no thread panic");
+            let archiv = match archiv.as_mut() {
+                Some(archiv) => archiv,
+                // only none during cleanup
+                None => return,
+            };
+            println!("locked in {:?}", start.elapsed());
+            let mut tried = || -> Result<()> {
+                archiv.write_item(&packed)?;
+                archiv.flush()?;
+                Ok(())
+            };
+            if let Err(e) = tried() {
+                eprintln!("archiv error: {:?}", e);
+                term.store(true, Ordering::SeqCst);
+            }
+            println!("written in {:?}", start.elapsed());
+        });
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let res = client
+                .post("http://localhost:9429/exp/store")
+                .body(packed2)
+                .send()
+                .await;
+            match res {
+                Ok(res) if res.status() == StatusCode::ACCEPTED => (),
+                Ok(res) => eprintln!("surprising send response: {:?}", res),
+                Err(e) => eprintln!("send error: {:?}", e),
+            }
+        });
     }
 
     println!("detaching...");
 
-    archiv.finish()?.flush()?;
-
+    let mut dr7 = ptrace::read_user(game_update, DR7)?;
+    dr7 &= !0b101;
     unsafe {
-        let mut dr7 = ptrace::read_user(game_update, DR7)?;
-        dr7 &= !0b101;
         ptrace::write_user(game_update, DR7, dr7 as *mut c_void)?;
     }
 
     ptrace::detach(game_update, None)?;
+
+    match archiv.lock() {
+        // if_let_guard unavailable due to mutation in take
+        // nested destructuring doesn't understand mutex guard (or I don't)
+        Ok(mut archiv) if archiv.is_some() => {
+            archiv.take().expect("just checked").finish()?.flush()?;
+        }
+        _ => {
+            eprintln!("archiv poisoned or None, ignoring for shutdown");
+        }
+    }
 
     Ok(())
 }
@@ -107,7 +170,7 @@ struct BodyState {
     hits: u64,
 }
 
-fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<()> {
+fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     let regs = ptrace::getregs(state.game_update)?;
 
     let dr6 = ptrace::read_user(state.game_update, DR6)?;
@@ -123,10 +186,10 @@ fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<
     state.hits += 1;
 
     if state.hits % 60 != 0 {
-        return Ok(());
+        return Ok(None);
     }
     if state.set_base == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let mut lites = walk_set_u64(state.game_update, state.set_base)?
         .into_iter()
@@ -134,50 +197,32 @@ fn body(state: &mut BodyState, archiv: &mut CompressStream<fs::File>) -> Result<
         .collect::<Result<Vec<CraftingLite>>>()?;
     lites.sort_unstable_by_key(|lite| lite.unit_number);
 
-    let obs = Observation {
+    Ok(Some(Observation {
         time: OffsetDateTime::now_utc(),
         inner: lites,
-    };
-
-    let packed = pack_observation(&obs)?;
-    archiv.write_item(&packed)?;
-    archiv.flush()?;
-
-    tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        let res = client
-            .post("http://localhost:9429/exp/store")
-            .body(packed)
-            .send()
-            .await;
-        match res {
-            Ok(res) if res.status() == StatusCode::ACCEPTED => (),
-            Ok(res) => eprintln!("surprising send response: {:?}", res),
-            Err(e) => eprintln!("send error: {:?}", e),
-        }
-    });
-
-    Ok(())
+    }))
 }
 
 fn read_crafting_lite(pid: Pid, ptr: u64) -> Result<CraftingLite> {
     let [unit_number] = bulk_read_ptr(pid, ptr + 0x98)?;
     let [products_complete] = bulk_read_ptr(pid, ptr + 0x204)?;
     return Ok(CraftingLite {
-        unit_number: (unit_number & 0xffff) as u32,
-        products_complete: (products_complete & 0xffff) as u32,
+        unit_number: (unit_number & 0xffffffff) as u32,
+        products_complete: (products_complete & 0xffffffff) as u32,
     });
 }
 
 fn walk_set_u64(pid: Pid, set_base: u64) -> Result<Vec<u64>> {
-    let [_unknown, _parent, begin, _end, _unknown_2, size] = bulk_read_ptr(pid, set_base)?;
-    let mut ret = Vec::with_capacity(size.min(4096) as usize);
-    let mut search = Vec::with_capacity(16);
+    // let [_unknown, _parent, begin, _end, _unknown_2, size] = bulk_read_ptr(pid, set_base)?;
+    let [begin] = bulk_read_ptr(pid, set_base + 16)?;
+    let mut ret = Vec::with_capacity(1024);
+    let mut search = Vec::with_capacity(64);
     search.push(begin);
     while let Some(here) = search.pop() {
         // https://github.com/gcc-mirror/gcc/blob/85d8e0d8d5342ec8b4e6a54e22741c30b33c6f04/libstdc%2B%2B-v3/include/bits/stl_tree.h#L106-L109
         // I don't think this is really color, it's full of garbage
-        let [_color, _parent, left_ptr, right_ptr, data_ptr] = bulk_read_ptr(pid, here)?;
+        // let [_color, _parent, left_ptr, right_ptr, data_ptr] = bulk_read_ptr(pid, here)?;
+        let [left_ptr, right_ptr, data_ptr] = bulk_read_ptr(pid, here + 16)?;
         if left_ptr != 0 {
             search.push(left_ptr);
         }
@@ -192,16 +237,15 @@ fn walk_set_u64(pid: Pid, set_base: u64) -> Result<Vec<u64>> {
     Ok(ret)
 }
 
+#[inline]
 fn bulk_read_ptr<const N: usize>(pid: Pid, addr: u64) -> Result<[u64; N]> {
     let mut ret = [0u64; N];
-    let mut offset = 0;
     for i in 0..N {
         let start = addr
-            .checked_add(u64::try_from(offset)?)
+            .checked_add(u64::try_from(i * 8)?)
             .ok_or(anyhow!("overflow during read"))?;
         let word = ptrace::read(pid, start as *mut _)?;
         ret[i] = word as u64;
-        offset += 8;
     }
     Ok(ret)
 }

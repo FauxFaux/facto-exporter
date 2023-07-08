@@ -5,9 +5,9 @@
 //extern int getStatus(void *crafting);
 
 struct Crafting {
-  char unknown[0x9c];
+  char unknown[0x98];
   uint32_t unit_number;
-  char unknown2[0x164];
+  char unknown2[0x168];
   uint32_t products_complete;
 };
 
@@ -21,9 +21,10 @@ struct SetEntry {
 
 struct Set {
   void *unknown;
-  void *unknown2;
-  void *unknown3;
+  void *parent;
   struct SetEntry *begin;
+  void *end;
+  void *unknown2;
   size_t size;
 };
 
@@ -33,6 +34,17 @@ struct CraftingLite {
   uint32_t status;
 };
 
+static void dbg_break(uint64_t code) {
+  // src, dest assembly
+  __asm volatile (
+    "mov %0, %%r10\n"
+    "int3"
+    :
+    : "r" (code)
+    : "r10"
+ );
+}
+
 extern void entry(
   struct Set *set,
   void* (*malloc)(size_t size),
@@ -41,8 +53,10 @@ extern void entry(
 ) {
   size_t size = set->size;
   struct CraftingLite *lites = malloc(size * sizeof(struct CraftingLite));
+  if (!lites) dbg_break(2);
   size_t lites_off = 0;
   struct SetEntry **search = malloc(1000 * sizeof(struct SetEntry));
+  if (!search) dbg_break(3);
   size_t search_off = 0;
   search[search_off++] = set->begin;
   while (search_off > 0) {
@@ -66,9 +80,11 @@ extern void entry(
 
   // make variables available in named (arbitrary) registers
   // and then trigger the breakpoint
+
+  // src, dest assembly
   __asm volatile (
-    "mov %%r10, %0\n"
-    "mov %%r11, %1\n"
+    "mov %0, %%r10\n"
+    "mov %1, %%r11\n"
     "int3"
     :
     : "r" (lites),
@@ -76,4 +92,6 @@ extern void entry(
     : "r10", "r11"
    );
   free(lites);
+
+  __asm volatile ("int3");
 }

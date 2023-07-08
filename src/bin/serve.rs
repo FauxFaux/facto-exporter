@@ -112,6 +112,10 @@ async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
             "facto_products_complete{{unit=\"{}\"}} {}\n",
             crafting.unit_number, crafting.products_complete,
         ));
+        s.push_str(&format!(
+            "facto_status{{unit=\"{}\"}} {}\n",
+            crafting.unit_number, crafting.status,
+        ));
     }
 
     s

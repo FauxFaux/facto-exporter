@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 pub struct CraftingLite {
     pub unit_number: u32,
     pub products_complete: u32,
+    pub status: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

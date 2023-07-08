@@ -1,18 +1,19 @@
 use std::ffi::c_void;
-use std::io::Write;
+use std::io::{IoSlice, IoSliceMut, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{fs, thread};
 
-use anyhow::Result;
 use anyhow::{anyhow, bail};
+use anyhow::{ensure, Result};
 use archiv::Compress;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use nix::libc::c_long;
 use nix::sys::ptrace;
+use nix::sys::uio::{process_vm_readv, process_vm_writev, RemoteIoVec};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use reqwest::StatusCode;
@@ -43,6 +44,17 @@ async fn main() -> Result<()> {
     println!("found products() at 0x{products_addr:x} for {products_size} bytes");
     let (crafting_insert, _) = find_symbol(&bin_path, "_ZNSt8_Rb_treeIP15CraftingMachineS1_St9_IdentityIS1_E20UnitNumberComparatorSaIS1_EE16_M_insert_uniqueIS1_EESt4pairISt17_Rb_tree_iteratorIS1_EbEOT_")?;
     let (game_update_step, _) = find_symbol(&bin_path, "_ZN8MainLoop14gameUpdateStepEP22MultiplayerManagerBaseP8ScenarioP10AppManagerNS_9HeavyModeE")?;
+    let (symbol_main, _) = find_symbol(&bin_path, "main")?;
+    // let (symbol_malloc, _) = find_symbol(&bin_path, "malloc")?;
+    // let (symbol_free, _) = find_symbol(&bin_path, "free")?;
+    let (symbol_crafting_status, _) = find_symbol(&bin_path, "_ZNK15CraftingMachine9getStatusEv")?;
+
+    // These don't resolve, something something dynamic linkers
+    let symbol_malloc = 0x00409070;
+    let symbol_free = 0x00409080;
+
+    println!("found main() at 0x{symbol_main:x}");
+    println!("found malloc() at 0x{symbol_malloc:x}");
     println!("found crafting_insert() at 0x{crafting_insert:x}");
 
     let parent_pid = find_pid(bin_path)?;
@@ -57,6 +69,17 @@ async fn main() -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
 
     unsafe {
+        let buf = include_bytes!("../../shellcode/crafting.bin");
+        // process_vm_writev(
+        //     game_update,
+        //     &[IoSlice::new(buf)],
+        //     &[RemoteIoVec {
+        //         base: symbol_main as usize,
+        //         len: buf.len(),
+        //     }],
+        // )?;
+        bulk_write(game_update, symbol_main, buf)?;
+
         ptrace::write_user(game_update, DR0, crafting_insert as *mut c_void)?;
         ptrace::write_user(game_update, DR1, game_update_step as *mut c_void)?;
         let mut dr7 = ptrace::read_user(game_update, DR7)?;
@@ -76,6 +99,12 @@ async fn main() -> Result<()> {
         set_size: 0,
         set_data: Vec::new(),
         hits: 0,
+        symbols: Symbols {
+            shell: symbol_main,
+            malloc: symbol_malloc,
+            free: symbol_free,
+            crafting_status: symbol_crafting_status,
+        },
     };
 
     // this whole loop is horribly unsafe; the cleanup is afterwards,
@@ -165,6 +194,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+struct Symbols {
+    shell: u64,
+    malloc: u64,
+    free: u64,
+    crafting_status: u64,
+}
+
 struct BodyState {
     game_update: Pid,
     set_base: u64,
@@ -172,6 +208,7 @@ struct BodyState {
     set_size: u64,
     set_data: Vec<u64>,
     hits: u64,
+    symbols: Symbols,
 }
 
 fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
@@ -193,23 +230,86 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     state.hits += 1;
 
     // only work every 15 game seconds (15 real seconds at 60UPS)
-    if state.hits % (60 * 15) != 0 {
+    if state.hits % (60 * 1) != 0 {
         return Ok(None);
     }
     if state.set_base == 0 {
         return Ok(None);
     }
 
-    if state.set_size != read_set_size(state)? {
-        read_set(state)?;
-    }
+    // println!("stepped over the breakpoint?");
+    // ptrace::step(state.game_update, None)?;
+    // waitpid(state.game_update, Some(WaitPidFlag::WSTOPPED))?;
 
-    let mut lites = state
-        .set_data
-        .iter()
-        .map(|&ptr| read_crafting_lite(state.game_update, ptr))
-        .collect::<Result<Vec<CraftingLite>>>()?;
-    lites.sort_unstable_by_key(|lite| lite.unit_number);
+    println!("stopped, ready to jump to shell");
+    let orig_regs = ptrace::getregs(state.game_update)?;
+    let mut regs = orig_regs.clone();
+    regs.rip = state.symbols.shell;
+    regs.rdi = state.set_base;
+    regs.rsi = state.symbols.malloc;
+    regs.rdx = state.symbols.free;
+    regs.rcx = state.symbols.crafting_status;
+    ptrace::setregs(state.game_update, regs)?;
+
+    println!("shell jumped to {:x}", regs.rip);
+    let [first_word] = bulk_read_ptr(state.game_update, regs.rip)?;
+    println!("first word: {:x}", first_word);
+
+    ptrace::cont(state.game_update, None)?;
+    println!(
+        "{:?}",
+        waitpid(state.game_update, Some(WaitPidFlag::WSTOPPED))?
+    );
+    let results = ptrace::getregs(state.game_update)?;
+    // println!("rip: {:x}", results.rip);
+    // println!("r10: {:x}", results.r10);
+    // println!("r11: {:x}", results.r11);
+
+    ensure!(
+        results.r10 > 1000,
+        "debug status code in r10? {}",
+        results.r10
+    );
+    ensure!(
+        results.r11 < 1024 * 1024,
+        "sane item count: {}",
+        results.r11
+    );
+    let size_of_c_crafting_lite = 3 * 4;
+    let mut buf = vec![0u8; results.r11 as usize * size_of_c_crafting_lite];
+    let len = buf.len();
+    process_vm_readv(
+        state.game_update,
+        &mut [IoSliceMut::new(&mut buf)],
+        &[RemoteIoVec {
+            base: results.r10 as usize,
+            len: len,
+        }],
+    )?;
+    // let the free() run
+    ptrace::cont(state.game_update, None)?;
+    println!(
+        "{:?}",
+        waitpid(state.game_update, Some(WaitPidFlag::WSTOPPED))?
+    );
+    // jump back
+    ptrace::setregs(state.game_update, orig_regs)?;
+
+    let lites = buf
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("exact")))
+        // TODO: pointless collect
+        .collect::<Vec<_>>()
+        .chunks_exact(3)
+        .map(|c| {
+            assert_eq!(c.len(), 3);
+            CraftingLite {
+                unit_number: c[0],
+                products_complete: c[1],
+                status: c[2],
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(Some(Observation {
         time: OffsetDateTime::now_utc(),
@@ -217,52 +317,9 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     }))
 }
 
-fn read_set(state: &mut BodyState) -> Result<()> {
-    if state.set_base == 0 {
-        return Ok(());
-    }
-    state.set_size = read_set_size(state)?;
-    state.set_data = walk_set_u64(state.game_update, state.set_base)?;
-    Ok(())
-}
-
 fn read_set_size(state: &BodyState) -> Result<u64> {
     let [size] = bulk_read_ptr(state.game_update, state.set_base + 40)?;
     Ok(size)
-}
-
-fn read_crafting_lite(pid: Pid, ptr: u64) -> Result<CraftingLite> {
-    let [unit_number] = bulk_read_ptr(pid, ptr + 0x98)?;
-    let [products_complete] = bulk_read_ptr(pid, ptr + 0x204)?;
-    return Ok(CraftingLite {
-        unit_number: (unit_number & 0xffffffff) as u32,
-        products_complete: (products_complete & 0xffffffff) as u32,
-    });
-}
-
-fn walk_set_u64(pid: Pid, set_base: u64) -> Result<Vec<u64>> {
-    // let [_unknown, _parent, begin, _end, _unknown_2, size] = bulk_read_ptr(pid, set_base)?;
-    let [begin] = bulk_read_ptr(pid, set_base + 16)?;
-    let mut ret = Vec::with_capacity(1024);
-    let mut search = Vec::with_capacity(64);
-    search.push(begin);
-    while let Some(here) = search.pop() {
-        // https://github.com/gcc-mirror/gcc/blob/85d8e0d8d5342ec8b4e6a54e22741c30b33c6f04/libstdc%2B%2B-v3/include/bits/stl_tree.h#L106-L109
-        // I don't think this is really color, it's full of garbage
-        // let [_color, _parent, left_ptr, right_ptr, data_ptr] = bulk_read_ptr(pid, here)?;
-        let [left_ptr, right_ptr, data_ptr] = bulk_read_ptr(pid, here + 16)?;
-        if left_ptr != 0 {
-            search.push(left_ptr);
-        }
-        if right_ptr != 0 {
-            search.push(right_ptr);
-        }
-        if data_ptr != 0 {
-            ret.push(data_ptr);
-        }
-    }
-
-    Ok(ret)
 }
 
 #[inline]
@@ -276,6 +333,26 @@ fn bulk_read_ptr<const N: usize>(pid: Pid, addr: u64) -> Result<[u64; N]> {
         ret[i] = word as u64;
     }
     Ok(ret)
+}
+
+fn bulk_write(pid: Pid, addr: u64, data: &[u8]) -> Result<()> {
+    let mut addr = addr;
+    for chunk in data.chunks(8) {
+        // let mut bytes = [0u8; 8];
+        // for (i, byte) in chunk.iter().enumerate() {
+        //     bytes[i] = *byte;
+        // }
+        if chunk.len() != 8 {
+            // TODO: MASSIVELY FAKE
+            continue;
+        }
+        let word = u64::from_le_bytes(chunk.try_into()?);
+        unsafe {
+            ptrace::write(pid, addr as *mut _, word as *mut _)?;
+        }
+        addr += 8;
+    }
+    Ok(())
 }
 
 fn dump(mem: &[u8], addr: u64) -> Result<()> {

@@ -23,6 +23,21 @@ struct AppState {
     logger: Bunyarr,
 }
 
+const KNOWN_STATUSES: [(u32, &'static str); 12] = [
+    (1, "working"),
+    (2, "normal"),
+    (37, "no_power"),
+    (12, "low_power"),
+    (36, "no_fuel"),
+    (38, "disabled_by_control_behaviour"),
+    (41, "disabled_by_script"),
+    (43, "marked_for_deconstruction"),
+    (15, "no_recipe"),
+    (20, "fluid_ingredient_shortage"),
+    (22, "full_output"),
+    (21, "item_ingredient_shortage"),
+];
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let logger = bunyarrs::Bunyarr::with_name("serve");
@@ -106,6 +121,11 @@ async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
         None => return String::new(),
     };
 
+    let status_lookup = KNOWN_STATUSES
+        .iter()
+        .copied()
+        .collect::<std::collections::HashMap<_, _>>();
+
     let mut s = String::with_capacity(data.inner.len() * 50);
     for crafting in &data.inner {
         s.push_str(&format!(
@@ -113,8 +133,10 @@ async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
             crafting.unit_number, crafting.products_complete,
         ));
         s.push_str(&format!(
-            "facto_status{{unit=\"{}\"}} {}\n",
-            crafting.unit_number, crafting.status,
+            "# {}\nfacto_status{{unit=\"{}\"}} {}\n",
+            status_lookup.get(&crafting.status).unwrap_or(&"unknown"),
+            crafting.unit_number,
+            crafting.status,
         ));
     }
 
@@ -196,41 +218,51 @@ async fn query(
             .map(|obs| obs.time.unix_timestamp())
             .collect::<Vec<_>>();
 
-        let mut deltas = Vec::with_capacity(units.len());
+        let mut unit_data = Vec::with_capacity(units.len());
         for _ in &units {
-            deltas.push(Vec::with_capacity(all_obses.len()));
+            unit_data.push(Vec::with_capacity(all_obses.len()));
         }
 
         for obs in obses {
-            assert_eq!(deltas.len(), units.len());
-            for (by_unit, unit) in deltas.iter_mut().zip(units.iter()) {
+            assert_eq!(unit_data.len(), units.len());
+            for (by_unit, unit) in unit_data.iter_mut().zip(units.iter()) {
                 if let Ok(found) = obs
                     .inner
                     .binary_search_by_key(&unit, |crafting| &crafting.unit_number)
                 {
                     let crafting = &obs.inner[found];
-                    by_unit.push(Some(crafting.products_complete));
+                    by_unit.push(Some((crafting.products_complete, crafting.status)));
                 } else {
                     by_unit.push(None);
                 }
             }
         }
 
-        let deltas = deltas
+        let statuses = unit_data
+            .iter()
+            .map(|unit_data| {
+                unit_data
+                    .iter()
+                    .map(|opt| opt.map(|(_, s)| s))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let deltas = unit_data
             .into_iter()
             .map(|deltas| {
                 deltas
                     .iter()
                     .zip(deltas.iter().skip(1))
                     .map(|(a, b)| match (a, b) {
-                        (Some(a), Some(b)) => b.checked_sub(*a),
+                        (Some((a, _)), Some((b, _))) => b.checked_sub(*a),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        Ok(json!({ "units": units, "deltas": deltas, "times": times }))
+        Ok(json!({ "units": units, "deltas": deltas, "statuses": statuses, "times": times }))
     })
     .await
 }

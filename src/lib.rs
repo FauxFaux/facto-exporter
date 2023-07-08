@@ -3,7 +3,7 @@ use bincode::Options;
 use std::io::Read;
 use time::OffsetDateTime;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct CraftingLite {
     pub unit_number: u32,
     pub products_complete: u32,

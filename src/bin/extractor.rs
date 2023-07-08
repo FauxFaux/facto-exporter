@@ -295,7 +295,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     // jump back
     ptrace::setregs(state.game_update, orig_regs)?;
 
-    let lites = buf
+    let mut lites = buf
         .chunks_exact(4)
         .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("exact")))
         // TODO: pointless collect
@@ -310,6 +310,8 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
             }
         })
         .collect::<Vec<_>>();
+
+    lites.sort_unstable_by_key(|l| l.unit_number);
 
     Ok(Some(Observation {
         time: OffsetDateTime::now_utc(),

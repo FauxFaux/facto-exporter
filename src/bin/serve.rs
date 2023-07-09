@@ -20,7 +20,7 @@ struct Data {
 }
 
 struct AppState {
-    data: Arc<tokio::sync::Mutex<Data>>,
+    data: Arc<tokio::sync::RwLock<Data>>,
     logger: Bunyarr,
 }
 
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
         .route("/api/query", get(query))
         .route("/api/last", get(last))
         .with_state(Arc::new(AppState {
-            data: Arc::new(tokio::sync::Mutex::new(data)),
+            data: Arc::new(tokio::sync::RwLock::new(data)),
             logger: Bunyarr::with_name("handler"),
         }));
 
@@ -110,14 +110,14 @@ async fn store(State(state): State<Arc<AppState>>, buf: Bytes) -> StatusCode {
         }
     };
 
-    let mut data = state.data.lock().await;
+    let mut data = state.data.write().await;
     data.inner.push(observation);
     StatusCode::ACCEPTED
 }
 
 #[axum::debug_handler]
 async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
-    let data = state.data.lock().await;
+    let data = state.data.read().await;
     let data = match data.inner.last() {
         Some(data) => data,
         None => return String::new(),
@@ -197,7 +197,7 @@ async fn query(
     let gap = query.gap.unwrap_or(60);
 
     okay_or_500(&state.logger, || async {
-        let data = state.data.lock().await;
+        let data = state.data.read().await;
 
         ensure!(!data.inner.is_empty(), "no data");
 
@@ -318,7 +318,7 @@ async fn last(
     };
 
     okay_or_500(&state.logger, || async {
-        let data = state.data.lock().await;
+        let data = state.data.read().await;
         ensure!(!data.inner.is_empty(), "no data");
 
         let mut changes = HashMap::with_capacity(units.len());

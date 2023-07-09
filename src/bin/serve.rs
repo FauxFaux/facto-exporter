@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::{fs, io};
 
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -163,15 +163,18 @@ async fn query(
     let mut units = match query
         .units
         .split(',')
-        .map(|s| -> Result<u32> { Ok(s.parse::<u32>()?) })
+        .map(|s| -> Result<u32> { Ok(s.parse::<u32>().with_context(|| anyhow!("{s:?}"))?) })
         .collect::<Result<Vec<u32>>>()
     {
         Ok(units) => units,
-        Err(_) => {
+        Err(err) => {
+            state
+                .logger
+                .warn(vars_dbg! { err }, "failed to parse units");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "invalid units" })),
-            )
+            );
         }
     };
 

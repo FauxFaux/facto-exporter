@@ -286,6 +286,7 @@ struct LastQuery {
 }
 
 #[derive(serde::Serialize, Default)]
+#[serde(rename_all="camelCase")]
 struct UnitData {
     produced_change: Option<i64>,
     last_status: Option<u32>,

@@ -10,7 +10,7 @@ use bunyarrs::{vars_dbg, Bunyarr};
 use serde_json::json;
 use time::OffsetDateTime;
 
-use crate::{okay_or_500, AppState};
+use crate::{okay_or_500, AppState, Data};
 
 fn split_units(logger: &Bunyarr, units: &str) -> Option<Vec<u32>> {
     match units
@@ -154,11 +154,11 @@ pub struct LastQuery {
 
 #[derive(serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct UnitData {
-    produced_change: Option<i64>,
-    last_status: Option<u32>,
-    last_status_change: Option<i64>,
-    previous_status: Option<u32>,
+pub struct UnitData {
+    pub produced_change: Option<i64>,
+    pub last_status: Option<u32>,
+    pub last_status_change: Option<i64>,
+    pub previous_status: Option<u32>,
 }
 
 impl UnitData {
@@ -192,45 +192,49 @@ pub(crate) async fn last(
         let mut changes = HashMap::with_capacity(units.len());
 
         for unit in &units {
-            let mut unit_data = UnitData::default();
-            let mut produced_previous = None;
-            let mut status_previous = None;
-            for obs in data.inner.iter().rev() {
-                let found = match obs
-                    .inner
-                    .binary_search_by_key(&unit, |crafting| &crafting.unit_number)
-                {
-                    Ok(found) => found,
-                    Err(_) => continue,
-                };
-                let found = &obs.inner[found];
-                if unit_data.produced_change.is_none() {
-                    if produced_previous.is_some()
-                        && produced_previous != Some(found.products_complete)
-                    {
-                        unit_data.produced_change = Some(obs.time.unix_timestamp());
-                    }
-                    produced_previous = Some(found.products_complete);
-                }
-                if unit_data.last_status.is_none() {
-                    unit_data.last_status = Some(found.status);
-                }
-                if unit_data.last_status_change.is_none() {
-                    if status_previous.is_some() && status_previous != Some(found.status) {
-                        unit_data.last_status_change = Some(obs.time.unix_timestamp());
-                        unit_data.previous_status = Some(found.status);
-                    }
-                    status_previous = Some(found.status);
-                }
-
-                if unit_data.all_complete() {
-                    break;
-                }
-            }
-            changes.insert(unit, unit_data);
+            changes.insert(unit, status_of(&data, *unit));
         }
 
         Ok(json!({ "changes": changes }))
     })
     .await
+}
+
+pub fn status_of(data: &Data, unit: u32) -> UnitData {
+    let mut unit_data = UnitData::default();
+    let mut produced_previous = None;
+    let mut status_previous = None;
+    for obs in data.inner.iter().rev() {
+        let found = match obs
+            .inner
+            .binary_search_by_key(&unit, |crafting| crafting.unit_number)
+        {
+            Ok(found) => found,
+            Err(_) => continue,
+        };
+        let found = &obs.inner[found];
+        if unit_data.produced_change.is_none() {
+            if produced_previous.is_some()
+                && produced_previous != Some(found.products_complete)
+            {
+                unit_data.produced_change = Some(obs.time.unix_timestamp());
+            }
+            produced_previous = Some(found.products_complete);
+        }
+        if unit_data.last_status.is_none() {
+            unit_data.last_status = Some(found.status);
+        }
+        if unit_data.last_status_change.is_none() {
+            if status_previous.is_some() && status_previous != Some(found.status) {
+                unit_data.last_status_change = Some(obs.time.unix_timestamp());
+                unit_data.previous_status = Some(found.status);
+            }
+            status_previous = Some(found.status);
+        }
+
+        if unit_data.all_complete() {
+            break;
+        }
+    }
+    unit_data
 }

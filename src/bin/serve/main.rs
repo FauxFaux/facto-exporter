@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use facto_exporter::{unpack_observation, Observation};
 
-struct Data {
+pub struct Data {
     inner: Vec<Observation>,
 }
 
@@ -56,6 +56,10 @@ async fn main() -> Result<()> {
         {
             continue;
         }
+        // when the exporter has crashed during startup? boo
+        if path.metadata()?.len() == 0 {
+            continue;
+        }
         let path = path.path();
         logger.info(vars! { path }, "loading observation");
         let mut archiv =
@@ -85,6 +89,7 @@ async fn main() -> Result<()> {
         .route("/exp/store", post(store))
         .route("/api/query", get(by_unit::query))
         .route("/api/last", get(by_unit::last))
+        .route("/api/bulk-status", get(bulk_unit::bulk_status))
         .with_state(Arc::new(AppState {
             data: Arc::new(tokio::sync::RwLock::new(data)),
             logger: Bunyarr::with_name("handler"),

@@ -1,4 +1,5 @@
 mod by_unit;
+mod bulk_unit;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -80,7 +81,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(|| async { env!("CARGO_PKG_NAME") }))
         .route("/healthcheck", get(|| async { "ok" }))
-        .route("/metrics/raw", get(metrics_raw))
+        .route("/metrics/raw", get(bulk_unit::metrics_raw))
         .route("/exp/store", post(store))
         .route("/api/query", get(by_unit::query))
         .route("/api/last", get(by_unit::last))
@@ -112,36 +113,6 @@ async fn store(State(state): State<Arc<AppState>>, buf: Bytes) -> StatusCode {
     let mut data = state.data.write().await;
     data.inner.push(observation);
     StatusCode::ACCEPTED
-}
-
-#[axum::debug_handler]
-async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
-    let data = state.data.read().await;
-    let data = match data.inner.last() {
-        Some(data) => data,
-        None => return String::new(),
-    };
-
-    let status_lookup = KNOWN_STATUSES
-        .iter()
-        .copied()
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let mut s = String::with_capacity(data.inner.len() * 50);
-    for crafting in &data.inner {
-        s.push_str(&format!(
-            "facto_products_complete{{unit=\"{}\"}} {}\n",
-            crafting.unit_number, crafting.products_complete,
-        ));
-        s.push_str(&format!(
-            "# {}\nfacto_status{{unit=\"{}\"}} {}\n",
-            status_lookup.get(&crafting.status).unwrap_or(&"unknown"),
-            crafting.unit_number,
-            crafting.status,
-        ));
-    }
-
-    s
 }
 
 async fn okay_or_500<F: Future<Output = Result<Value>>>(

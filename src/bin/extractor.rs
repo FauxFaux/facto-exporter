@@ -229,8 +229,8 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
 
     state.hits += 1;
 
-    // only work every 15 game seconds (15 real seconds at 60UPS)
-    if state.hits % (60 * 1) != 0 {
+    // only work every N game seconds (N real seconds at 60UPS, N/2 at 30UPS)
+    if state.hits % (60 * 7) != 0 {
         return Ok(None);
     }
     if state.set_base == 0 {

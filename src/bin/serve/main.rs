@@ -1,5 +1,5 @@
-mod by_unit;
 mod bulk_unit;
+mod by_unit;
 
 use std::future::Future;
 use std::sync::Arc;

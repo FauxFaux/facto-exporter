@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use anyhow::anyhow;
+use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
 use serde_json::json;
 
-use crate::{AppState, KNOWN_STATUSES, okay_or_500};
 use crate::by_unit::status_of;
+use crate::{okay_or_500, AppState, KNOWN_STATUSES};
 
 #[axum::debug_handler]
 pub async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
@@ -42,18 +42,33 @@ pub async fn metrics_raw(State(state): State<Arc<AppState>>) -> String {
 pub async fn bulk_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     okay_or_500(&state.logger, || async {
         let data = state.data.read().await;
-        let units = data.inner.last().ok_or_else(|| anyhow!("service is empty"))?.inner.iter().map(|c| c.unit_number).collect::<Vec<_>>();
+        let units = data
+            .inner
+            .last()
+            .ok_or_else(|| anyhow!("service is empty"))?
+            .inner
+            .iter()
+            .map(|c| c.unit_number)
+            .collect::<Vec<_>>();
         // let mut statuses = HashMap::with_capacity(units.len());
-        let statuses = units.iter().copied().map(|unit| {
-            let s = status_of(&data, unit);
-            (unit, (
-                s.produced_change,
-                s.last_status_change,
-                s.last_status,
-                s.previous_status,
-            ))
-        }).collect::<Vec<_>>();
+        let statuses = units
+            .iter()
+            .copied()
+            .map(|unit| {
+                let s = status_of(&data, unit);
+                (
+                    unit,
+                    (
+                        s.produced_change,
+                        s.last_status_change,
+                        s.last_status,
+                        s.previous_status,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
 
         Ok(json!({"statuses": statuses}))
-    }).await
+    })
+    .await
 }

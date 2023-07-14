@@ -214,9 +214,7 @@ pub fn status_of(data: &Data, unit: u32) -> UnitData {
         };
         let found = &obs.inner[found];
         if unit_data.produced_change.is_none() {
-            if produced_previous.is_some()
-                && produced_previous != Some(found.products_complete)
-            {
+            if produced_previous.is_some() && produced_previous != Some(found.products_complete) {
                 unit_data.produced_change = Some(obs.time.unix_timestamp());
             }
             produced_previous = Some(found.products_complete);

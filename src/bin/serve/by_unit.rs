@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::{okay_or_500, AppState, Data};
 
-fn split_units(logger: &Bunyarr, units: &str) -> Option<Vec<u32>> {
+pub fn split_units(logger: &Bunyarr, units: &str) -> Option<Vec<u32>> {
     match units
         .split(',')
         .map(|s| -> Result<u32> { Ok(s.parse::<u32>().with_context(|| anyhow!("{s:?}"))?) })
@@ -20,6 +20,7 @@ fn split_units(logger: &Bunyarr, units: &str) -> Option<Vec<u32>> {
     {
         Ok(mut units) => {
             units.sort_unstable();
+            units.dedup();
             Some(units)
         }
         Err(err) => {

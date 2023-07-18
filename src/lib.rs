@@ -16,6 +16,12 @@ pub struct Observation {
     pub inner: Vec<CraftingLite>,
 }
 
+impl Observation {
+    pub fn ts(&self) -> i64 {
+        self.time.unix_timestamp()
+    }
+}
+
 fn bincode() -> impl Options {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()

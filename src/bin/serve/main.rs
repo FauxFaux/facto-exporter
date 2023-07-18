@@ -1,5 +1,6 @@
 mod bulk_unit;
 mod by_unit;
+mod long_time;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -89,6 +90,7 @@ async fn main() -> Result<()> {
         .route("/exp/store", post(store))
         .route("/api/query", get(by_unit::query))
         .route("/api/last", get(by_unit::last))
+        .route("/api/long", get(long_time::long))
         .route("/api/bulk-status", get(bulk_unit::bulk_status))
         .with_state(Arc::new(AppState {
             data: Arc::new(tokio::sync::RwLock::new(data)),

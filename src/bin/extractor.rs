@@ -45,13 +45,11 @@ async fn main() -> Result<()> {
     let (crafting_insert, _) = find_symbol(&bin_path, "_ZNSt8_Rb_treeIP15CraftingMachineS1_St9_IdentityIS1_E20UnitNumberComparatorSaIS1_EE16_M_insert_uniqueIS1_EESt4pairISt17_Rb_tree_iteratorIS1_EbEOT_")?;
     let (game_update_step, _) = find_symbol(&bin_path, "_ZN8MainLoop14gameUpdateStepEP22MultiplayerManagerBaseP8ScenarioP10AppManagerNS_9HeavyModeE")?;
     let (symbol_main, _) = find_symbol(&bin_path, "main")?;
-    // let (symbol_malloc, _) = find_symbol(&bin_path, "malloc")?;
-    // let (symbol_free, _) = find_symbol(&bin_path, "free")?;
     let (symbol_crafting_status, _) = find_symbol(&bin_path, "_ZNK15CraftingMachine9getStatusEv")?;
 
-    // These don't resolve, something something dynamic linkers
-    let symbol_malloc = 0x00409070;
-    let symbol_free = 0x00409080;
+    // using crypto variants as they're statically linked; we don't have to deal with dynamic linking
+    let (symbol_malloc, _) = find_symbol(&bin_path, "CRYPTO_malloc")?;
+    let (symbol_free, _) = find_symbol(&bin_path, "CRYPTO_free")?;
 
     println!("found main() at 0x{symbol_main:x}");
     println!("found malloc() at 0x{symbol_malloc:x}");

@@ -1,8 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-//extern void *malloc(size_t size);
-//extern int getStatus(void *crafting);
+extern int getStatus(void *crafting);
 
 struct Crafting {
   char unknown[0x98];
@@ -47,15 +46,16 @@ static void dbg_break(uint64_t code) {
 
 extern void entry(
   struct Set *set,
-  void* (*malloc)(size_t size),
-  void (*free)(void *ptr),
+  // actually CRYPTO_malloc, CRYPTO_free; which additionally take __FILE and __LINE
+  void* (*malloc)(size_t size, char* _unused, int _unused2),
+  void (*free)(void *ptr, char* _unused, int _unused2),
   int (*getStatus)(struct Crafting *crafting)
 ) {
   size_t size = set->size;
-  struct CraftingLite *lites = malloc(size * sizeof(struct CraftingLite));
+  struct CraftingLite *lites = malloc(size * sizeof(struct CraftingLite), "", 0);
   if (!lites) dbg_break(2);
   size_t lites_off = 0;
-  struct SetEntry **search = malloc(1000 * sizeof(struct SetEntry));
+  struct SetEntry **search = malloc(1000 * sizeof(struct SetEntry), "", 0);
   if (!search) dbg_break(3);
   size_t search_off = 0;
   search[search_off++] = set->begin;
@@ -76,7 +76,7 @@ extern void entry(
     lites[lites_off++] = lite;
   }
 
-  free(search);
+  free(search, "", 0);
 
   // make variables available in named (arbitrary) registers
   // and then trigger the breakpoint
@@ -91,7 +91,7 @@ extern void entry(
       "r" (lites_off)
     : "r10", "r11"
    );
-  free(lites);
+  free(lites, "", 0);
 
   __asm volatile ("int3");
 }

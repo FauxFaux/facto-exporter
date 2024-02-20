@@ -3,6 +3,7 @@ mod by_unit;
 mod long_time;
 
 use std::future::Future;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::{fs, io};
 
@@ -99,9 +100,9 @@ async fn main() -> Result<()> {
 
     let port = 9429;
     logger.info(vars! { port }, "starting server");
-    axum::Server::bind(&([127, 0, 0, 1], port).into())
-        .serve(app.into_make_service())
-        .await?;
+
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::from([127, 0, 0, 1]), port)).await?;
+    axum::serve(listener, app.into_make_service()).await?;
     Ok(())
 }
 

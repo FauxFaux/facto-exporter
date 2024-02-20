@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io::{IoSlice, IoSliceMut, Write};
 use std::path::Path;
@@ -39,17 +40,27 @@ async fn main() -> Result<()> {
             .ok_or(anyhow!("usage: bin path"))?,
     )?;
     println!("loading symbols from {bin_path:?}...");
+    let symtab = full_symbol_table(&bin_path)?;
+    let find_symbol = |symbol: &str| -> Result<(u64, usize)> {
+        Ok(*symtab
+            .get(symbol)
+            .ok_or_else(|| anyhow!("{symbol} not found"))?)
+    };
     let (products_addr, products_size) =
-        find_symbol(&bin_path, "_ZN15CraftingMachine12giveProductsERK6Recipeb")?;
+        find_symbol("_ZN15CraftingMachine12giveProductsERK6Recipeb")?;
     println!("found products() at 0x{products_addr:x} for {products_size} bytes");
-    let (crafting_insert, _) = find_symbol(&bin_path, "_ZNSt8_Rb_treeIP15CraftingMachineS1_St9_IdentityIS1_E20UnitNumberComparatorSaIS1_EE16_M_insert_uniqueIS1_EESt4pairISt17_Rb_tree_iteratorIS1_EbEOT_")?;
-    let (game_update_step, _) = find_symbol(&bin_path, "_ZN8MainLoop14gameUpdateStepEP22MultiplayerManagerBaseP8ScenarioP10AppManagerNS_9HeavyModeE")?;
-    let (symbol_main, _) = find_symbol(&bin_path, "main")?;
-    let (symbol_crafting_status, _) = find_symbol(&bin_path, "_ZNK15CraftingMachine9getStatusEv")?;
+    let (crafting_insert, _) = find_symbol("_ZNSt8_Rb_treeIP15CraftingMachineS1_St9_IdentityIS1_E20UnitNumberComparatorSaIS1_EE16_M_insert_uniqueIS1_EESt4pairISt17_Rb_tree_iteratorIS1_EbEOT_")?;
+    let (game_update_step, _) =
+        // 1.1.53
+        find_symbol("_ZN8MainLoop14gameUpdateStepEP22MultiplayerManagerBaseP8ScenarioP10AppManagerNS_9HeavyModeE")
+            // 1.1.104
+            .or_else(|_| find_symbol("_ZN8MainLoop14gameUpdateStepEP22MultiplayerManagerBaseP8ScenarioP10AppManagerNS_9HeavyModeE.isra.0"))?;
+    let (symbol_main, _) = find_symbol("main")?;
+    let (symbol_crafting_status, _) = find_symbol("_ZNK15CraftingMachine9getStatusEv")?;
 
     // using crypto variants as they're statically linked; we don't have to deal with dynamic linking
-    let (symbol_malloc, _) = find_symbol(&bin_path, "CRYPTO_malloc")?;
-    let (symbol_free, _) = find_symbol(&bin_path, "CRYPTO_free")?;
+    let (symbol_malloc, _) = find_symbol("CRYPTO_malloc")?;
+    let (symbol_free, _) = find_symbol("CRYPTO_free")?;
 
     println!("found main() at 0x{symbol_main:x}");
     println!("found malloc() at 0x{symbol_malloc:x}");
@@ -367,7 +378,7 @@ fn dump(mem: &[u8], addr: u64) -> Result<()> {
     Ok(())
 }
 
-fn find_symbol(bin_path: impl AsRef<Path>, symbol: &str) -> Result<(u64, usize)> {
+fn full_symbol_table(bin_path: impl AsRef<Path>) -> Result<HashMap<String, (u64, usize)>> {
     let f = fs::read(bin_path)?;
     let f = f.as_slice();
     let f = ElfBytes::<AnyEndian>::minimal_parse(f)?;
@@ -375,15 +386,17 @@ fn find_symbol(bin_path: impl AsRef<Path>, symbol: &str) -> Result<(u64, usize)>
     let common = f.find_common_data()?;
     let symtab = common.symtab.ok_or(anyhow!("no symtab"))?;
     let strtab = common.symtab_strs.ok_or(anyhow!("no strtab"))?;
+    let mut ret = HashMap::with_capacity(symtab.len());
 
     for sym in symtab {
         let name = strtab.get(usize::try_from(sym.st_name)?)?;
-        if name == symbol {
-            return Ok((sym.st_value, usize::try_from(sym.st_size)?));
-        }
+        ret.insert(
+            name.to_string(),
+            (sym.st_value, usize::try_from(sym.st_size)?),
+        );
     }
 
-    bail!("{symbol} not found");
+    Ok(ret)
 }
 
 fn find_pid(bin_path: impl AsRef<Path>) -> Result<i32> {

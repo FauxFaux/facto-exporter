@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
+use nix::unistd::Pid;
 
-pub fn full_symbol_table(
-    bin_path: impl AsRef<Path>,
-) -> anyhow::Result<HashMap<String, (u64, usize)>> {
+pub fn full_symbol_table(bin_path: impl AsRef<Path>) -> Result<HashMap<String, (u64, usize)>> {
     let f = fs::read(bin_path)?;
     let f = f.as_slice();
     let f = ElfBytes::<AnyEndian>::minimal_parse(f)?;
@@ -29,7 +28,7 @@ pub fn full_symbol_table(
     Ok(ret)
 }
 
-pub fn find_pid(bin_path: impl AsRef<Path>) -> anyhow::Result<i32> {
+pub fn find_pid(bin_path: impl AsRef<Path>) -> Result<Pid> {
     let mut candidates = Vec::with_capacity(4);
     let bin_path = bin_path.as_ref();
     for d in std::fs::read_dir("/proc")? {
@@ -49,12 +48,12 @@ pub fn find_pid(bin_path: impl AsRef<Path>) -> anyhow::Result<i32> {
 
     match candidates.len() {
         0 => bail!("pid not found"),
-        1 => return Ok(candidates[0]),
+        1 => return Ok(Pid::from_raw(candidates[0])),
         _ => bail!("multiple pids found"),
     }
 }
 
-pub fn find_threads(pid: i32) -> anyhow::Result<Vec<i32>> {
+pub fn find_threads(pid: i32) -> Result<Vec<i32>> {
     let mut ret = Vec::new();
     for d in std::fs::read_dir(format!("/proc/{}/task", pid))? {
         let d = d?;
@@ -66,7 +65,7 @@ pub fn find_threads(pid: i32) -> anyhow::Result<Vec<i32>> {
     Ok(ret)
 }
 
-pub fn find_thread(pid: i32, name: &str) -> anyhow::Result<i32> {
+pub fn find_thread(pid: Pid, name: &str) -> Result<Pid> {
     for d in std::fs::read_dir(format!("/proc/{}/task", pid))? {
         let d = d?;
         if !d.file_type()?.is_dir() {
@@ -75,7 +74,7 @@ pub fn find_thread(pid: i32, name: &str) -> anyhow::Result<i32> {
         let tid = d.file_name().to_string_lossy().parse()?;
         let comm = std::fs::read_to_string(format!("/proc/{}/task/{}/comm", pid, tid))?;
         if comm.trim() == name {
-            return Ok(tid);
+            return Ok(Pid::from_raw(tid));
         }
     }
     bail!("thread not found");

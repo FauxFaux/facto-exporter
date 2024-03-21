@@ -1,4 +1,3 @@
-use std::ffi::c_void;
 use std::io::{IoSliceMut, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,13 +17,10 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
-use facto_exporter::debug::ptrace::{read_words_ptr, write_words_ptr};
+use facto_exporter::debug::ptrace::{
+    breakpoint, read_words_ptr, which_breakpoints, write_words_ptr,
+};
 use facto_exporter::{pack_observation, CraftingLite, Observation};
-
-const DR0: *mut c_void = 848 as *mut c_void;
-const DR1: *mut c_void = 856 as *mut c_void;
-const DR6: *mut c_void = 896 as *mut c_void;
-const DR7: *mut c_void = 904 as *mut c_void;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -66,7 +62,7 @@ async fn main() -> Result<()> {
 
     let parent_pid = find_pid(bin_path)?;
     println!("found pid {parent_pid}");
-    let game_update = Pid::from_raw(find_thread(parent_pid, "GameUpdate")?);
+    let game_update = find_thread(parent_pid, "GameUpdate")?;
     println!("found GameUpdate thread {game_update}");
 
     ptrace::attach(game_update)?;
@@ -75,26 +71,18 @@ async fn main() -> Result<()> {
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
 
-    unsafe {
-        let buf = include_bytes!("../../shellcode/crafting.bin");
-        // process_vm_writev(
-        //     game_update,
-        //     &[IoSlice::new(buf)],
-        //     &[RemoteIoVec {
-        //         base: symbol_main as usize,
-        //         len: buf.len(),
-        //     }],
-        // )?;
-        write_words_ptr(game_update, symbol_main, buf)?;
-
-        ptrace::write_user(game_update, DR0, crafting_insert as *mut c_void)?;
-        ptrace::write_user(game_update, DR1, game_update_step as *mut c_void)?;
-        let mut dr7 = ptrace::read_user(game_update, DR7)?;
-        // bit 0: local enable 0
-        // bit 2: local enable 1
-        dr7 |= 0b101;
-        ptrace::write_user(game_update, DR7, dr7 as *mut c_void)?;
+    {
+        let mut buf = include_bytes!("../../shellcode/crafting.bin").to_vec();
+        while buf.len() % 8 != 0 {
+            buf.push(0);
+        }
+        write_words_ptr(game_update, symbol_main, &buf)?;
     }
+
+    breakpoint(
+        game_update,
+        [Some(crafting_insert), Some(game_update_step), None, None],
+    )?;
 
     println!("debugging, waiting for an assembler place...");
 
@@ -179,11 +167,7 @@ async fn main() -> Result<()> {
 
     println!("detaching...");
 
-    let mut dr7 = ptrace::read_user(game_update, DR7)?;
-    dr7 &= !0b101;
-    unsafe {
-        ptrace::write_user(game_update, DR7, dr7 as *mut c_void)?;
-    }
+    breakpoint(game_update, [None, None, None, None])?;
 
     ptrace::detach(game_update, None)?;
 
@@ -221,9 +205,9 @@ struct BodyState {
 fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     let regs = ptrace::getregs(state.game_update)?;
 
-    let dr6 = ptrace::read_user(state.game_update, DR6)?;
+    let hits = which_breakpoints(state.game_update)?;
 
-    if dr6 & 0b1 == 1 {
+    if hits[0] {
         println!(
             "hit place: old base: {:x}, new base: {:x}",
             state.set_base, regs.rdi

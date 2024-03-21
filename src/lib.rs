@@ -1,3 +1,5 @@
+pub mod debug;
+
 use anyhow::Result;
 use bincode::Options;
 use std::io::Read;

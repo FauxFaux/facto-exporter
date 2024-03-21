@@ -1,26 +1,23 @@
-use std::collections::HashMap;
 use std::ffi::c_void;
-use std::io::{IoSlice, IoSliceMut, Write};
-use std::path::Path;
+use std::io::{IoSliceMut, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{fs, thread};
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use anyhow::{ensure, Result};
 use archiv::Compress;
-use elf::endian::AnyEndian;
-use elf::ElfBytes;
 use nix::libc::c_long;
 use nix::sys::ptrace;
-use nix::sys::uio::{process_vm_readv, process_vm_writev, RemoteIoVec};
+use nix::sys::uio::{process_vm_readv, RemoteIoVec};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use reqwest::StatusCode;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
 use facto_exporter::{pack_observation, CraftingLite, Observation};
 
 const DR0: *mut c_void = 848 as *mut c_void;
@@ -34,7 +31,7 @@ async fn main() -> Result<()> {
         archiv::CompressOptions::default().stream_compress(fs::File::create(path_for_now())?)?,
     )));
     assert_eq!(std::mem::size_of::<c_long>(), 8);
-    let bin_path = std::fs::canonicalize(
+    let bin_path = fs::canonicalize(
         std::env::args_os()
             .nth(1)
             .ok_or(anyhow!("usage: bin path"))?,
@@ -292,7 +289,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
         &mut [IoSliceMut::new(&mut buf)],
         &[RemoteIoVec {
             base: results.r10 as usize,
-            len: len,
+            len,
         }],
     )?;
     // let the free() run
@@ -376,79 +373,6 @@ fn dump(mem: &[u8], addr: u64) -> Result<()> {
         println!();
     }
     Ok(())
-}
-
-fn full_symbol_table(bin_path: impl AsRef<Path>) -> Result<HashMap<String, (u64, usize)>> {
-    let f = fs::read(bin_path)?;
-    let f = f.as_slice();
-    let f = ElfBytes::<AnyEndian>::minimal_parse(f)?;
-
-    let common = f.find_common_data()?;
-    let symtab = common.symtab.ok_or(anyhow!("no symtab"))?;
-    let strtab = common.symtab_strs.ok_or(anyhow!("no strtab"))?;
-    let mut ret = HashMap::with_capacity(symtab.len());
-
-    for sym in symtab {
-        let name = strtab.get(usize::try_from(sym.st_name)?)?;
-        ret.insert(
-            name.to_string(),
-            (sym.st_value, usize::try_from(sym.st_size)?),
-        );
-    }
-
-    Ok(ret)
-}
-
-fn find_pid(bin_path: impl AsRef<Path>) -> Result<i32> {
-    let mut candidates = Vec::with_capacity(4);
-    let bin_path = bin_path.as_ref();
-    for d in std::fs::read_dir("/proc")? {
-        let d = d?;
-        if !d.file_type()?.is_dir() {
-            continue;
-        }
-        match d.path().join("exe").read_link() {
-            Ok(p) => {
-                if p == bin_path {
-                    candidates.push(d.file_name().to_string_lossy().parse()?);
-                }
-            }
-            Err(_) => continue,
-        }
-    }
-
-    match candidates.len() {
-        0 => bail!("pid not found"),
-        1 => return Ok(candidates[0]),
-        _ => bail!("multiple pids found"),
-    }
-}
-
-fn find_threads(pid: i32) -> Result<Vec<i32>> {
-    let mut ret = Vec::new();
-    for d in std::fs::read_dir(format!("/proc/{}/task", pid))? {
-        let d = d?;
-        if !d.file_type()?.is_dir() {
-            continue;
-        }
-        ret.push(d.file_name().to_string_lossy().parse()?);
-    }
-    Ok(ret)
-}
-
-fn find_thread(pid: i32, name: &str) -> Result<i32> {
-    for d in std::fs::read_dir(format!("/proc/{}/task", pid))? {
-        let d = d?;
-        if !d.file_type()?.is_dir() {
-            continue;
-        }
-        let tid = d.file_name().to_string_lossy().parse()?;
-        let comm = std::fs::read_to_string(format!("/proc/{}/task/{}/comm", pid, tid))?;
-        if comm.trim() == name {
-            return Ok(tid);
-        }
-    }
-    bail!("thread not found");
 }
 
 fn path_for_now() -> String {

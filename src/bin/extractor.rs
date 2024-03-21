@@ -18,6 +18,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
+use facto_exporter::debug::ptrace::{read_words_ptr, write_words_ptr};
 use facto_exporter::{pack_observation, CraftingLite, Observation};
 
 const DR0: *mut c_void = 848 as *mut c_void;
@@ -84,7 +85,7 @@ async fn main() -> Result<()> {
         //         len: buf.len(),
         //     }],
         // )?;
-        bulk_write(game_update, symbol_main, buf)?;
+        write_words_ptr(game_update, symbol_main, buf)?;
 
         ptrace::write_user(game_update, DR0, crafting_insert as *mut c_void)?;
         ptrace::write_user(game_update, DR1, game_update_step as *mut c_void)?;
@@ -258,7 +259,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     ptrace::setregs(state.game_update, regs)?;
 
     println!("shell jumped to {:x}", regs.rip);
-    let [first_word] = bulk_read_ptr(state.game_update, regs.rip)?;
+    let [first_word] = read_words_ptr(state.game_update, regs.rip)?;
     println!("first word: {:x}", first_word);
 
     ptrace::cont(state.game_update, None)?;
@@ -326,53 +327,8 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
 }
 
 fn read_set_size(state: &BodyState) -> Result<u64> {
-    let [size] = bulk_read_ptr(state.game_update, state.set_base + 40)?;
+    let [size] = read_words_ptr(state.game_update, state.set_base + 40)?;
     Ok(size)
-}
-
-#[inline]
-fn bulk_read_ptr<const N: usize>(pid: Pid, addr: u64) -> Result<[u64; N]> {
-    let mut ret = [0u64; N];
-    for i in 0..N {
-        let start = addr
-            .checked_add(u64::try_from(i * 8)?)
-            .ok_or(anyhow!("overflow during read"))?;
-        let word = ptrace::read(pid, start as *mut _)?;
-        ret[i] = word as u64;
-    }
-    Ok(ret)
-}
-
-fn bulk_write(pid: Pid, addr: u64, data: &[u8]) -> Result<()> {
-    let mut addr = addr;
-    for chunk in data.chunks(8) {
-        // let mut bytes = [0u8; 8];
-        // for (i, byte) in chunk.iter().enumerate() {
-        //     bytes[i] = *byte;
-        // }
-        if chunk.len() != 8 {
-            // TODO: MASSIVELY FAKE
-            continue;
-        }
-        let word = u64::from_le_bytes(chunk.try_into()?);
-        unsafe {
-            ptrace::write(pid, addr as *mut _, word as *mut _)?;
-        }
-        addr += 8;
-    }
-    Ok(())
-}
-
-fn dump(mem: &[u8], addr: u64) -> Result<()> {
-    for (off, block) in mem.chunks(8).enumerate() {
-        let off = 8 * u64::try_from(off)?;
-        print!("{:016x} <+{off:3x}> ", addr + off);
-        for byte in block {
-            print!("{:02x} ", byte);
-        }
-        println!();
-    }
-    Ok(())
 }
 
 fn path_for_now() -> String {

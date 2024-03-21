@@ -37,4 +37,8 @@
  * read the values out of the struct
  * resume
 
-(all completely untested)
+---
+
+ * all completely untested
+ * doesn't handle detach, which supposedly works with the old one
+ * we could ptrace-breakpoint the place the int3 would be if it was there, but not actually have it there

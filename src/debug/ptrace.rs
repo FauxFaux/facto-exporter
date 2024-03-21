@@ -1,8 +1,12 @@
 use anyhow::{anyhow, Result};
 use nix::libc::c_long;
 use std::ffi::c_void;
+use std::io::IoSliceMut;
 
 use nix::sys::ptrace;
+use nix::sys::signal::Signal;
+use nix::sys::uio::{process_vm_readv, RemoteIoVec};
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
 const DR0: *mut c_void = 848 as *mut c_void;
@@ -97,6 +101,44 @@ pub fn which_breakpoints(pid: Pid) -> Result<[bool; 4]> {
         get_bit(dr6, 2),
         get_bit(dr6, 3),
     ])
+}
+
+pub fn bulk_read(pid: Pid, base: usize, len: usize) -> Result<Vec<u8>> {
+    let mut buf = vec![0; len];
+    let chunks_read = process_vm_readv(
+        pid,
+        &mut [IoSliceMut::new(&mut buf)],
+        &[RemoteIoVec { base, len }],
+    )?;
+
+    assert_eq!(
+        chunks_read, 1,
+        "readv only asked for one chunk, and it succeeded, so must have read one chunk"
+    );
+
+    Ok(buf)
+}
+
+/// issue a cont(), then wait for a stop; if we didn't get a stop, issue another cont() and try again repeatedly
+pub fn cont_until_stop(pid: Pid) -> Result<Signal> {
+    loop {
+        ptrace::cont(pid, None)?;
+
+        if let Some(signal) = wait_for_stop(pid)? {
+            return Ok(signal);
+        }
+    }
+}
+
+/// issue a single waitpid, expecting a stop, and return Some if we hit it
+pub fn wait_for_stop(pid: Pid) -> Result<Option<Signal>> {
+    Ok(match waitpid(pid, Some(WaitPidFlag::WSTOPPED))? {
+        WaitStatus::Stopped(stopped_pid, signal) => {
+            assert_eq!(stopped_pid, pid, "waitpid should only return our pid");
+            Some(signal)
+        }
+        _ => None,
+    })
 }
 
 #[inline]

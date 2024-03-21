@@ -1,4 +1,4 @@
-use std::io::{IoSliceMut, Write};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,8 +9,6 @@ use anyhow::{ensure, Result};
 use archiv::Compress;
 use nix::libc::c_long;
 use nix::sys::ptrace;
-use nix::sys::uio::{process_vm_readv, RemoteIoVec};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use reqwest::StatusCode;
 use time::format_description::well_known::Rfc3339;
@@ -18,7 +16,8 @@ use time::OffsetDateTime;
 
 use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
 use facto_exporter::debug::ptrace::{
-    breakpoint, read_words_ptr, which_breakpoints, write_words_ptr,
+    breakpoint, bulk_read, cont_until_stop, read_words_ptr, wait_for_stop, which_breakpoints,
+    write_words_ptr,
 };
 use facto_exporter::{pack_observation, CraftingLite, Observation};
 
@@ -66,7 +65,7 @@ async fn main() -> Result<()> {
     println!("found GameUpdate thread {game_update}");
 
     ptrace::attach(game_update)?;
-    waitpid(game_update, Some(WaitPidFlag::WSTOPPED))?;
+    ensure!(wait_for_stop(game_update)?.is_some(), "we stopped");
 
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
@@ -105,12 +104,7 @@ async fn main() -> Result<()> {
     // this whole loop is horribly unsafe; the cleanup is afterwards,
     // and can't be run unless then process is stopped, so you can't break or error
     while !term.load(Ordering::SeqCst) {
-        ptrace::cont(game_update, None)?;
-        let status = waitpid(game_update, Some(WaitPidFlag::WSTOPPED))?;
-        match status {
-            WaitStatus::Stopped(_, _) => (),
-            _ => continue,
-        };
+        cont_until_stop(game_update)?;
 
         let start = Instant::now();
         let obs = match observe(&mut state) {
@@ -246,11 +240,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     let [first_word] = read_words_ptr(state.game_update, regs.rip)?;
     println!("first word: {:x}", first_word);
 
-    ptrace::cont(state.game_update, None)?;
-    println!(
-        "{:?}",
-        waitpid(state.game_update, Some(WaitPidFlag::WSTOPPED))?
-    );
+    cont_until_stop(state.game_update)?;
     let results = ptrace::getregs(state.game_update)?;
     // println!("rip: {:x}", results.rip);
     // println!("r10: {:x}", results.r10);
@@ -267,22 +257,14 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
         results.r11
     );
     let size_of_c_crafting_lite = 3 * 4;
-    let mut buf = vec![0u8; results.r11 as usize * size_of_c_crafting_lite];
-    let len = buf.len();
-    process_vm_readv(
+    let buf = bulk_read(
         state.game_update,
-        &mut [IoSliceMut::new(&mut buf)],
-        &[RemoteIoVec {
-            base: results.r10 as usize,
-            len,
-        }],
+        results.r10 as usize,
+        results.r11 as usize * size_of_c_crafting_lite,
     )?;
+
     // let the free() run
-    ptrace::cont(state.game_update, None)?;
-    println!(
-        "{:?}",
-        waitpid(state.game_update, Some(WaitPidFlag::WSTOPPED))?
-    );
+    cont_until_stop(state.game_update)?;
     // jump back
     ptrace::setregs(state.game_update, orig_regs)?;
 

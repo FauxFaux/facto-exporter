@@ -1,4 +1,5 @@
 pub mod elf;
+pub mod inject;
 pub mod ptrace;
 
 pub fn pad_to_word(buf: &[u8], with: u8) -> Vec<u64> {

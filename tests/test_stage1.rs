@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use facto_exporter::debug::elf::{find_function, full_symbol_table, Symbol};
+use facto_exporter::debug::inject::inject_mmap;
 use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
     breakpoint, find_executable_map, read_words_var, run_until_stop, wait_for_stop,
@@ -48,27 +49,7 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     run_until_stop(pid)?;
     assert_eq!([false, false, true, false], which_breakpoints(pid)?);
 
-    let stage1 = pad_to_word(include_bytes!("../shellcode/stage1.bin"), 0xcc);
-
-    let backup = read_words_var(pid, from, stage1.len())?;
-    write_words_ptr(pid, from, &stage1)?;
-
-    let orig_regs = ptrace::getregs(pid)?;
-    let mut regs = orig_regs.clone();
-    regs.rip = from;
-    ptrace::setregs(pid, regs)?;
-
-    run_until_stop(pid)?;
-
-    regs = ptrace::getregs(pid)?;
-    // let executed = regs.rip as i64 - from as i64;
-    // executed == stage1_bytes.len()
-
-    let map_addr = regs.rax;
-    // println!("{}", fs::read_to_string(format!("/proc/{}/maps", pid))?);
-
-    write_words_ptr(pid, from, &backup)?;
-    ptrace::setregs(pid, orig_regs)?;
+    let map_addr = inject_mmap(pid, from)?;
 
     write_words_ptr(
         pid,

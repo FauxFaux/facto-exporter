@@ -12,7 +12,7 @@ nop
 nop
 mov rax, 9
 xor rdi, rdi
-mov rsi, 655360
+mov rsi, 65536000
 mov rdx, 7
 mov r10, 34
 mov r8, -1

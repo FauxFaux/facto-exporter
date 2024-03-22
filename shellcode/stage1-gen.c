@@ -18,7 +18,7 @@ int main() {
     // https://en.wikibooks.org/wiki/X86_Assembly/Interfacing_with_Linux#Via_dedicated_system_call_invocation_instruction
     printf("mov rax, %d\n", __NR_mmap);
     printf("xor rdi, rdi\n"); // address hint
-    printf("mov rsi, %d\n", 640 * 1024); // should be enough for anyone
+    printf("mov rsi, %d\n", 100 * 640 * 1024); // should be enough for anyone
     printf("mov rdx, %d\n", PROT_EXEC | PROT_READ | PROT_WRITE);
     printf("mov r10, %d\n", MAP_PRIVATE | MAP_ANONYMOUS);
     printf("mov r8, %d\n", -1); // no fd

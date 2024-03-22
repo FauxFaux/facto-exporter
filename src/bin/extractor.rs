@@ -17,7 +17,7 @@ use time::OffsetDateTime;
 use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
 use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
-    breakpoint, bulk_read, cont_until_stop, read_words_arr, wait_for_stop, which_breakpoints,
+    breakpoint, bulk_read, read_words_arr, run_until_stop, wait_for_stop, which_breakpoints,
     write_words_ptr,
 };
 use facto_exporter::{pack_observation, CraftingLite, Observation};
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     println!("found GameUpdate thread {game_update}");
 
     ptrace::attach(game_update)?;
-    ensure!(wait_for_stop(game_update)?.is_some(), "we stopped");
+    wait_for_stop(game_update)?;
 
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
     // this whole loop is horribly unsafe; the cleanup is afterwards,
     // and can't be run unless then process is stopped, so you can't break or error
     while !term.load(Ordering::SeqCst) {
-        cont_until_stop(game_update)?;
+        run_until_stop(game_update)?;
 
         let start = Instant::now();
         let obs = match observe(&mut state) {
@@ -239,7 +239,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     let [first_word] = read_words_arr(state.game_update, regs.rip)?;
     println!("first word: {:x}", first_word);
 
-    cont_until_stop(state.game_update)?;
+    run_until_stop(state.game_update)?;
     let results = ptrace::getregs(state.game_update)?;
     // println!("rip: {:x}", results.rip);
     // println!("r10: {:x}", results.r10);
@@ -263,7 +263,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     )?;
 
     // let the free() run
-    cont_until_stop(state.game_update)?;
+    run_until_stop(state.game_update)?;
     // jump back
     ptrace::setregs(state.game_update, orig_regs)?;
 

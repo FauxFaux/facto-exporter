@@ -11,6 +11,10 @@
 
 int main() {
     printf("BITS 64\n");
+    // nop slide because something something rip isn't aligned right, 11 because it makes the file mod 8 long
+    for (int i = 0; i < 11; ++i) {
+        printf("nop\n");
+    }
     // https://en.wikibooks.org/wiki/X86_Assembly/Interfacing_with_Linux#Via_dedicated_system_call_invocation_instruction
     printf("mov rax, %d\n", __NR_mmap);
     printf("xor rdi, rdi\n"); // address hint

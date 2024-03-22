@@ -1,4 +1,15 @@
 BITS 64
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
 mov rax, 9
 xor rdi, rdi
 mov rsi, 655360

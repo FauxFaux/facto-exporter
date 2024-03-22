@@ -131,28 +131,37 @@ pub fn bulk_read(pid: Pid, base: usize, len: usize) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// issue a cont(), then wait for a stop; if we didn't get a stop, issue another cont() and try again repeatedly
-pub fn cont_until_stop(pid: Pid) -> Result<Signal> {
-    loop {
-        ptrace::cont(pid, None)?;
-
-        if let Some(signal) = wait_for_stop(pid)? {
-            return Ok(signal);
-        }
-    }
+pub fn run_until_stop(pid: Pid) -> Result<()> {
+    ptrace::cont(pid, None)?;
+    wait_for_stop(pid)?;
+    Ok(())
 }
 
-/// issue a single waitpid, expecting a stop, and return Some if we hit it
-pub fn wait_for_stop(pid: Pid) -> Result<Option<Signal>> {
-    let status = waitpid(pid, Some(WaitPidFlag::WSTOPPED))?;
-    println!("waitpid: {:?}", status);
-    Ok(match status {
-        WaitStatus::Stopped(stopped_pid, signal) => {
-            assert_eq!(stopped_pid, pid, "waitpid should only return our pid");
-            Some(signal)
+/// issue a cont(), then wait for a stop; if we didn't get a stop, issue another cont() and try again repeatedly
+///
+/// Stops cleanly on SIGSTOP (ptrace) and SIGTRAP (int3).
+pub fn wait_for_stop(pid: Pid) -> Result<()> {
+    loop {
+        let status = waitpid(pid, Some(WaitPidFlag::WSTOPPED))?;
+        println!("waitpid: {:?}", status);
+
+        let signal = match status {
+            WaitStatus::Stopped(stopped_pid, signal) => {
+                assert_eq!(stopped_pid, pid, "waitpid should only return our pid");
+                if signal == Signal::SIGSTOP || signal == Signal::SIGTRAP {
+                    return Ok(());
+                }
+                signal
+            }
+            _ => continue,
+        };
+
+        if let Ok(regs) = ptrace::getregs(pid) {
+            println!("passing on signal at {:x}", regs.rip);
         }
-        _ => None,
-    })
+
+        ptrace::cont(pid, signal)?;
+    }
 }
 
 #[inline]

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
+use cpp_demangle::DemangleOptions;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use nix::unistd::Pid;
@@ -69,7 +70,7 @@ pub fn find_threads(pid: i32) -> Result<Vec<i32>> {
 }
 
 pub fn find_thread(pid: Pid, name: &str) -> Result<Pid> {
-    for d in std::fs::read_dir(format!("/proc/{}/task", pid))? {
+    for d in fs::read_dir(format!("/proc/{}/task", pid))? {
         let d = d?;
         if !d.file_type()?.is_dir() {
             continue;
@@ -81,4 +82,32 @@ pub fn find_thread(pid: Pid, name: &str) -> Result<Pid> {
         }
     }
     bail!("thread not found");
+}
+
+/// demangle function names and take the first one that looks about right
+pub fn find_function(table: &HashMap<String, Symbol>, name: &str) -> Result<(String, u64, usize)> {
+    if let Some((addr, size)) = table.get(name) {
+        return Ok((name.to_string(), *addr, *size));
+    }
+
+    let opts = DemangleOptions::default().no_params().no_return_type();
+
+    for (raw, (addr, size)) in table {
+        if !raw.contains(name) {
+            continue;
+        }
+        let Ok(sym) = cpp_demangle::Symbol::new(raw) else {
+            continue;
+        };
+        let Ok(sym) = sym.demangle(&opts) else {
+            continue;
+        };
+        if sym != name {
+            continue;
+        }
+
+        return Ok((raw.to_string(), *addr, *size));
+    }
+
+    bail!("no function found")
 }

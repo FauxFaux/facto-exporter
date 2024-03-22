@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use nix::libc::c_long;
 use std::ffi::c_void;
 use std::io::IoSliceMut;
@@ -162,6 +162,36 @@ pub fn wait_for_stop(pid: Pid) -> Result<()> {
 
         ptrace::cont(pid, signal)?;
     }
+}
+
+/// (from, to, offset)
+///
+/// `from` and `to` are the real start and end addresses in virtual memory
+/// `offset` is the offset used in the symbol table, something something the layout in the file
+pub fn find_executable_map(pid: Pid) -> Result<(u64, u64, u64)> {
+    let maps = std::fs::read_to_string(format!("/proc/{}/maps", pid))?;
+    for line in maps.lines() {
+        let mut it = line.split_whitespace();
+
+        let addrs = it.next().ok_or_else(|| anyhow!("no addrs"))?;
+        let perms = it.next().ok_or_else(|| anyhow!("no perms"))?;
+        if !perms.contains('x') {
+            continue;
+        }
+        let offset = it.next().ok_or_else(|| anyhow!("no offset"))?;
+        let _dev = it.next().ok_or_else(|| anyhow!("no dev"))?;
+        let _inode = it.next().ok_or_else(|| anyhow!("no inode"))?;
+        // path is inaccurate due to split_whitespace
+        let _path_first = it.next().ok_or_else(|| anyhow!("no path"))?;
+
+        let (from, to) = addrs.split_once('-').ok_or_else(|| anyhow!("no -"))?;
+        let from = u64::from_str_radix(from, 16)?;
+        let to = u64::from_str_radix(to, 16)?;
+        let offset = u64::from_str_radix(offset, 16)?;
+        return Ok((from, to, offset));
+    }
+
+    bail!("no executable map found");
 }
 
 #[inline]

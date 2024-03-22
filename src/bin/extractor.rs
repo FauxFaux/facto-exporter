@@ -15,8 +15,9 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use facto_exporter::debug::elf::{find_pid, find_thread, full_symbol_table};
+use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
-    breakpoint, bulk_read, cont_until_stop, read_words_ptr, wait_for_stop, which_breakpoints,
+    breakpoint, bulk_read, cont_until_stop, read_words_arr, wait_for_stop, which_breakpoints,
     write_words_ptr,
 };
 use facto_exporter::{pack_observation, CraftingLite, Observation};
@@ -70,13 +71,11 @@ async fn main() -> Result<()> {
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
 
-    {
-        let mut buf = include_bytes!("../../shellcode/crafting.bin").to_vec();
-        while buf.len() % 8 != 0 {
-            buf.push(0);
-        }
-        write_words_ptr(game_update, symbol_main, &buf)?;
-    }
+    write_words_ptr(
+        game_update,
+        symbol_main,
+        &pad_to_word(include_bytes!("../../shellcode/crafting.bin"), 0x90),
+    )?;
 
     breakpoint(
         game_update,
@@ -237,7 +236,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
     ptrace::setregs(state.game_update, regs)?;
 
     println!("shell jumped to {:x}", regs.rip);
-    let [first_word] = read_words_ptr(state.game_update, regs.rip)?;
+    let [first_word] = read_words_arr(state.game_update, regs.rip)?;
     println!("first word: {:x}", first_word);
 
     cont_until_stop(state.game_update)?;
@@ -293,7 +292,7 @@ fn observe(state: &mut BodyState) -> Result<Option<Observation>> {
 }
 
 fn read_set_size(state: &BodyState) -> Result<u64> {
-    let [size] = read_words_ptr(state.game_update, state.set_base + 40)?;
+    let [size] = read_words_arr(state.game_update, state.set_base + 40)?;
     Ok(size)
 }
 

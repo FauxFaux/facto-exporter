@@ -7,7 +7,10 @@ use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use nix::unistd::Pid;
 
-pub fn full_symbol_table(bin_path: impl AsRef<Path>) -> Result<HashMap<String, (u64, usize)>> {
+/// (address, size)
+pub type Symbol = (u64, usize);
+
+pub fn full_symbol_table(bin_path: impl AsRef<Path>) -> Result<HashMap<String, Symbol>> {
     let f = fs::read(bin_path)?;
     let f = f.as_slice();
     let f = ElfBytes::<AnyEndian>::minimal_parse(f)?;

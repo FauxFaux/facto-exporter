@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use nix::libc::c_long;
 use std::ffi::c_void;
 use std::io::IoSliceMut;
@@ -17,36 +17,48 @@ const DR6: *mut c_void = 896 as *mut c_void;
 const DR7: *mut c_void = 904 as *mut c_void;
 
 #[inline]
-pub fn read_words_ptr<const N: usize>(pid: Pid, addr: u64) -> Result<[u64; N]> {
+pub fn read_words_arr<const N: usize>(pid: Pid, addr: u64) -> Result<[u64; N]> {
     let mut ret = [0u64; N];
+    assert!(
+        addr.checked_add(u64::try_from(N * 8).expect("usize <= 2^64"))
+            .is_some(),
+        "{addr} + {N} words overflows u64"
+    );
     for i in 0..N {
-        let start = addr
-            .checked_add(u64::try_from(i * 8)?)
-            .ok_or(anyhow!("overflow during read"))?;
+        // assert! above validates cast
+        let start = addr + (i * 8) as u64;
         let word = ptrace::read(pid, start as *mut _)?;
         ret[i] = word as u64;
     }
     Ok(ret)
 }
 
-pub fn write_words_ptr(pid: Pid, addr: u64, data: &[u8]) -> Result<()> {
+#[inline]
+pub fn read_words_var(pid: Pid, addr: u64, words: usize) -> Result<Vec<u64>> {
+    let mut ret = vec![0u64; words];
+    assert!(
+        addr.checked_add(u64::try_from(words * 8).expect("usize <= 2^64"))
+            .is_some(),
+        "{addr} + {words} words overflows u64"
+    );
+    for i in 0..words {
+        // assert! above validates cast
+        let start = addr + (i * 8) as u64;
+        println!("reading {start:x}");
+        let word = ptrace::read(pid, start as *mut _)?;
+        ret[i] = word as u64;
+    }
+    Ok(ret)
+}
+
+pub fn write_words_ptr(pid: Pid, addr: u64, data: &[u64]) -> Result<()> {
     let mut addr = addr;
     let ptr_size = std::mem::size_of::<*mut c_void>();
     assert_eq!(ptr_size, 8, "64-bit machines only");
-    assert_eq!(
-        data.len() % ptr_size,
-        0,
-        "data of length {} is not divisible by the word size, 8",
-        data.len()
-    );
-    for chunk in data.chunks_exact(ptr_size) {
-        let word = u64::from_le_bytes(
-            chunk
-                .try_into()
-                .expect("chunks_exact (or, in the future, array_chunks)"),
-        );
+
+    for word in data {
         unsafe {
-            ptrace::write(pid, addr as *mut _, word as *mut _)?;
+            ptrace::write(pid, addr as *mut _, *word as *mut _)?;
         }
         addr += 8;
     }
@@ -132,7 +144,9 @@ pub fn cont_until_stop(pid: Pid) -> Result<Signal> {
 
 /// issue a single waitpid, expecting a stop, and return Some if we hit it
 pub fn wait_for_stop(pid: Pid) -> Result<Option<Signal>> {
-    Ok(match waitpid(pid, Some(WaitPidFlag::WSTOPPED))? {
+    let status = waitpid(pid, Some(WaitPidFlag::WSTOPPED))?;
+    println!("waitpid: {:?}", status);
+    Ok(match status {
         WaitStatus::Stopped(stopped_pid, signal) => {
             assert_eq!(stopped_pid, pid, "waitpid should only return our pid");
             Some(signal)

@@ -41,3 +41,40 @@ pub fn entry_in_addr(addr_file: &str) -> Result<u64> {
     let offset = it.next().ok_or_else(|| anyhow!("no offset"))?;
     Ok(u64::from_str_radix(offset, 16)?)
 }
+
+/// (mem, mock_get_status_offset in words)
+pub fn shell_code() -> (Vec<u64>, u64) {
+    // if this isn't right, call-end.bin needs to learn to jump further forward
+    assert_eq!(
+        0,
+        entry_in_addr(include_str!("../../shellcode/crafting2.bin.addr"))
+            .expect("parsing static asset")
+    );
+
+    // if this isn't right, mock_get_status_addr needs handling (but it won't change)
+    assert_eq!(
+        0,
+        entry_in_addr(include_str!("../../shellcode/mock-get-status.bin.addr"))
+            .expect("parsing static asset")
+    );
+
+    let call_end = pad_to_word(include_bytes!("../../shellcode/call-end.bin"), 0xcc);
+    assert_eq!(call_end.len(), 1);
+
+    let mock_get_status = pad_to_word(include_bytes!("../../shellcode/mock-get-status.bin"), 0xcc);
+    assert_eq!(mock_get_status.len(), 1);
+
+    let main_code = pad_to_word(include_bytes!("../../shellcode/crafting2.bin"), 0xcc);
+
+    let mut mem = Vec::with_capacity(64);
+    // 0-8: jump to code
+    mem.extend_from_slice(&call_end);
+
+    // 8-whatever: code
+    mem.extend_from_slice(&main_code);
+
+    let mock_get_status_off = u64::try_from(mem.len()).expect("40 < 2^64");
+    mem.extend_from_slice(&mock_get_status);
+
+    (mem, mock_get_status_off)
+}

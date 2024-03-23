@@ -5,7 +5,7 @@ use std::{iter, thread};
 
 use anyhow::Result;
 use facto_exporter::debug::elf::{find_function, full_symbol_table, Symbol};
-use facto_exporter::debug::inject::{entry_in_addr, inject_mmap};
+use facto_exporter::debug::inject::{entry_in_addr, inject_mmap, shell_code};
 use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
     breakpoint, find_executable_map, read_words_arr, read_words_var, run_until_stop, wait_for_stop,
@@ -32,6 +32,8 @@ fn smoke() -> Result<()> {
 }
 
 fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
+    assert_eq!(std::mem::size_of::<CraftingLite>(), 3 * 4);
+
     let (step_named, step, _) = find_function(table, "step")?;
     println!("step found as (mangled): {step_named} at {step:#x}");
 
@@ -50,90 +52,28 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     assert_eq!([false, false, true, false], which_breakpoints(pid)?);
 
     let map_addr = inject_mmap(pid, from)?;
-    let fake_structs_addr = inject_mmap(pid, from)?;
-
-    let set_off = 32;
-    let mut mem = Vec::with_capacity(4096);
-    mem.extend(iter::repeat(0).take(set_off));
-
-    let mut craftings = Vec::new();
-    for i in 0..4 {
-        craftings.push(mem.len());
-        let mut crafting = FakeCrafting::default();
-        crafting.data[0x26] = 0x100 + i;
-        crafting.data[0x81] = 0x1000 + i;
-        mem.extend_from_slice(&bytemuck::bytes_of(&crafting));
-    }
-
-    let mut entries = Vec::new();
-    let root = place(&mut entries, &craftings);
-    let set_size = std::mem::size_of::<FakeSetEntry>();
-    let set_base = fake_structs_addr + mem.len() as u64;
-    let to_set_addr = |x: Option<usize>| x.map(|x| set_base + (set_size * x) as u64).unwrap_or(0);
-    for (left, right, crafting) in entries {
-        mem.extend_from_slice(&bytemuck::bytes_of(&FakeSetEntry {
-            left: to_set_addr(left),
-            right: to_set_addr(right),
-            data: fake_structs_addr + crafting as u64,
-            ..FakeSetEntry::default()
-        }));
-    }
-
-    let set_addr = fake_structs_addr + mem.len() as u64;
-    mem.extend_from_slice(&bytemuck::bytes_of(&FakeSet {
-        begin: to_set_addr(root),
-        size: craftings.len(),
-        ..FakeSet::default()
-    }));
-
-    write_words_ptr(pid, fake_structs_addr, &pad_to_word(&mem, 0x66))?;
-
-    let call_end = pad_to_word(include_bytes!("../shellcode/call-end.bin"), 0xcc);
-    assert_eq!(call_end.len(), 1);
-
-    let mock_get_status = pad_to_word(include_bytes!("../shellcode/mock-get-status.bin"), 0xcc);
-    assert_eq!(mock_get_status.len(), 1);
-
-    // if this isn't right, call-end.bin needs to learn to jump further forward
-    assert_eq!(
-        0,
-        entry_in_addr(include_str!("../shellcode/crafting2.bin.addr"))?
-    );
-
-    // if this isn't right, mock_get_status_addr needs handling (but it won't change)
-    assert_eq!(
-        0,
-        entry_in_addr(include_str!("../shellcode/mock-get-status.bin.addr"))?
-    );
+    let set_addr = alloc_fake_set(pid, from)?;
 
     let mut mem = Vec::with_capacity(64);
-    // 0-8: jump to code
-    mem.extend_from_slice(&call_end);
-    // 8-whatever: code
-    mem.extend(pad_to_word(
-        include_bytes!("../shellcode/crafting2.bin"),
-        0xcc,
-    ));
 
-    let mock_get_status_addr = map_addr + 8 * mem.len() as u64;
-    mem.extend_from_slice(&mock_get_status);
+    let (code, mock_get_status) = shell_code();
+    mem.extend_from_slice(&code);
+    let mock_get_status_addr = map_addr + 8 * mock_get_status;
 
-    let shellcode_fits_in = 1024;
-    // padding
-    assert!(mem.len() < shellcode_fits_in / 8);
-    mem.resize(shellcode_fits_in / 8, 0xcc);
-    let mem_addr = map_addr + u64::try_from(shellcode_fits_in).expect("sub-128bit machine please");
+    let mem_addr = map_addr + 8 * u64::try_from(mem.len()).expect("sub-128bit machine please");
 
-    // now, crafting2.c's interface struct, "Mem":
+    let crafting_lite_size = 3 * 4;
+
+    // now, crafting2.c's interface struct, "Shared":
     // 0-8: pointer to the set, in the real world will be set by code
     mem.push(set_addr);
     // 8-16: pointer to the get
     mem.push(mock_get_status_addr);
     // 16-24: estimated capacity, based on the size of the mmap from stage1
-    mem.push(60 * 1024 * 1024 / 8 / 3);
+    mem.push(60 * 1024 * 1024 / crafting_lite_size);
     // 24-32: size, set by code
     mem.push(0);
-    // 32+: data
+    // 32+: data as a list of CraftingLite
 
     write_words_ptr(pid, map_addr, &mem)?;
 
@@ -202,6 +142,47 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     Ok(())
 }
 
+fn alloc_fake_set(pid: Pid, from: u64) -> Result<u64> {
+    let fake_structs_addr = inject_mmap(pid, from)?;
+
+    let set_off = 32;
+    let mut mem = Vec::with_capacity(4096);
+    mem.extend(iter::repeat(0).take(set_off));
+
+    let mut craftings = Vec::new();
+    for i in 0..4 {
+        craftings.push(mem.len());
+        let mut crafting = FakeCrafting::default();
+        crafting.data[0x26] = 0x100 + i;
+        crafting.data[0x81] = 0x1000 + i;
+        mem.extend_from_slice(&bytemuck::bytes_of(&crafting));
+    }
+
+    let mut entries = Vec::new();
+    let root = place(&mut entries, &craftings);
+    let set_size = std::mem::size_of::<FakeSetEntry>();
+    let set_base = fake_structs_addr + mem.len() as u64;
+    let to_set_addr = |x: Option<usize>| x.map(|x| set_base + (set_size * x) as u64).unwrap_or(0);
+    for (left, right, crafting) in entries {
+        mem.extend_from_slice(&bytemuck::bytes_of(&FakeSetEntry {
+            left: to_set_addr(left),
+            right: to_set_addr(right),
+            data: fake_structs_addr + crafting as u64,
+            ..FakeSetEntry::default()
+        }));
+    }
+
+    let set_addr = fake_structs_addr + mem.len() as u64;
+    mem.extend_from_slice(&bytemuck::bytes_of(&FakeSet {
+        begin: to_set_addr(root),
+        size: craftings.len(),
+        ..FakeSet::default()
+    }));
+
+    write_words_ptr(pid, fake_structs_addr, &pad_to_word(&mem, 0x66))?;
+    Ok(set_addr)
+}
+
 // the layout here is arbitrary
 fn place<T: Copy>(heap: &mut Vec<(Option<usize>, Option<usize>, T)>, vals: &[T]) -> Option<usize> {
     if vals.is_empty() {
@@ -238,6 +219,13 @@ fn test_place() {
     assert_eq!(heap[4], (None, None, 7));
     assert_eq!(heap[5], (Some(3), Some(4), 6));
     assert_eq!(heap[6], (Some(2), Some(5), 4));
+}
+
+#[repr(C)]
+struct CraftingLite {
+    unit: u32,
+    products: u32,
+    status: u32,
 }
 
 #[repr(C)]

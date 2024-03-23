@@ -29,7 +29,7 @@ struct CraftingLite {
   uint32_t status;
 };
 
-struct Mem {
+struct Shared {
   // in
   struct Set *set;
   int (*getStatus)(struct Crafting *crafting);
@@ -41,12 +41,12 @@ struct Mem {
 };
 
 extern int entry(
-  struct Mem *mem
+  struct Shared *mem
 );
 
 static void walk(
   struct SetEntry *entry,
-  struct Mem *mem
+  struct Shared *mem
 ) {
   if (entry == NULL) {
     return;
@@ -70,7 +70,7 @@ static void walk(
 }
 
 extern int entry(
-  struct Mem *mem
+  struct Shared *mem
 ) {
   mem->size = 0;
   walk(mem->set->begin, mem);

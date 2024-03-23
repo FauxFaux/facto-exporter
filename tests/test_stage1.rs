@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
-use std::{iter, thread};
+use std::{iter, slice, thread};
 
 use anyhow::Result;
 use facto_exporter::debug::elf::{find_function, full_symbol_table, Symbol};
-use facto_exporter::debug::inject::{entry_in_addr, inject_mmap, shell_code};
+use facto_exporter::debug::inject::{inject_mmap, shell_code};
 use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
     breakpoint, find_executable_map, read_words_arr, read_words_var, run_until_stop, wait_for_stop,
@@ -32,7 +32,8 @@ fn smoke() -> Result<()> {
 }
 
 fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
-    assert_eq!(std::mem::size_of::<CraftingLite>(), 4 * 4);
+    let crafting_lite_size = std::mem::size_of::<CraftingLite>() as u64;
+    assert_eq!(crafting_lite_size, 4 * 4);
 
     let (step_named, step, _) = find_function(table, "step")?;
     println!("step found as (mangled): {step_named} at {step:#x}");
@@ -60,9 +61,7 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     mem.extend_from_slice(&code);
     let mock_get_status_addr = map_addr + 8 * mock_get_status;
 
-    let mem_addr = map_addr + 8 * u64::try_from(mem.len()).expect("sub-128bit machine please");
-
-    let crafting_lite_size = 3 * 4;
+    let mem_addr = map_addr + 8 * (mem.len() as u64);
 
     // now, crafting2.c's interface struct, "Shared":
     // 0-8: pointer to the set, in the real world will be set by code
@@ -116,26 +115,28 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     let [count] = read_words_arr(pid, mem_addr + 24)?;
     assert_eq!(4, count, "{count}, {word:#x}");
     let needed_bytes = crafting_lite_size * count;
+    assert_eq!(crafting_lite_size % 8, 0);
+    let needed_words = needed_bytes / 8;
 
-    let words = read_words_var(pid, mem_addr + 32, 8)?;
-    let words = words
-        .iter()
-        .flat_map(|x| x.to_le_bytes())
-        .collect::<Vec<_>>();
-    let words = words
-        .chunks_exact(4)
-        .map(|x| u32::from_le_bytes(x.try_into().expect("chunks_exact")))
-        .collect::<Vec<_>>();
+    let words = read_words_var(pid, mem_addr + 32, needed_words as usize)?;
+    let craftings =
+        unsafe { slice::from_raw_parts(words.as_ptr() as *const CraftingLite, count as usize) };
 
     let mock = 0xf00dd00d;
-    #[rustfmt::skip]
-    assert_eq!([
-          0x100, 0x1000, mock, 0,
-          0x101, 0x1001, mock, 0,
-          0x102, 0x1002, mock, 0,
-          0x103, 0x1003, mock, 0,
+    let c = |unit, products, status| CraftingLite {
+        unit,
+        products,
+        status,
+        _reserved: 0,
+    };
+    assert_eq!(
+        [
+            c(0x100, 0x1000, mock),
+            c(0x101, 0x1001, mock),
+            c(0x102, 0x1002, mock),
+            c(0x103, 0x1003, mock),
         ],
-        words.as_slice(), "{words:x?}"
+        craftings
     );
 
     println!("checking it isn't completely corrupt...");
@@ -224,6 +225,7 @@ fn test_place() {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct CraftingLite {
     unit: u32,
     products: u32,

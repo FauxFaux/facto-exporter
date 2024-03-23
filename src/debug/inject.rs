@@ -1,6 +1,6 @@
 use super::pad_to_word;
 use super::ptrace::{read_words_var, run_until_stop, write_words_ptr};
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use nix::sys::ptrace;
 use nix::unistd::Pid;
 
@@ -30,4 +30,14 @@ pub fn inject_mmap(pid: Pid, scratch: u64) -> Result<u64> {
     ptrace::setregs(pid, orig_regs)?;
 
     Ok(map_addr)
+}
+
+pub fn entry_in_addr(addr_file: &str) -> Result<u64> {
+    let line = addr_file
+        .lines()
+        .find(|line| line.ends_with("entry"))
+        .ok_or_else(|| anyhow!("entry not found"))?;
+    let mut it = line.split_whitespace();
+    let offset = it.next().ok_or_else(|| anyhow!("no offset"))?;
+    Ok(u64::from_str_radix(offset, 16)?)
 }

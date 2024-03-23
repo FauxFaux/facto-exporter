@@ -1,4 +1,4 @@
-bins: crafting.bin stage1.bin crafting2.bin call-end.bin
+bins: crafting.bin stage1.bin crafting2.bin call-end.bin mock-get-status.bin
 
 %.o: %.c
 	clang -march=x86-64-v3 -Wall -Wextra -fPIC -O1 -c -std=c2x $<

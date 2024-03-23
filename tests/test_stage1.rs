@@ -32,7 +32,7 @@ fn smoke() -> Result<()> {
 }
 
 fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
-    assert_eq!(std::mem::size_of::<CraftingLite>(), 3 * 4);
+    assert_eq!(std::mem::size_of::<CraftingLite>(), 4 * 4);
 
     let (step_named, step, _) = find_function(table, "step")?;
     println!("step found as (mangled): {step_named} at {step:#x}");
@@ -113,8 +113,10 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     }
 
     // size
-    let [word] = read_words_arr(pid, mem_addr + 24)?;
-    assert_eq!(4, word, "{word}, {word:#x}");
+    let [count] = read_words_arr(pid, mem_addr + 24)?;
+    assert_eq!(4, count, "{count}, {word:#x}");
+    let needed_bytes = crafting_lite_size * count;
+
     let words = read_words_var(pid, mem_addr + 32, 8)?;
     let words = words
         .iter()
@@ -126,15 +128,15 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
         .collect::<Vec<_>>();
 
     let mock = 0xf00dd00d;
-    assert_eq!(
-        [
-            0x100, 0x1000, mock, 0x101, 0x1001, mock, 0x102, 0x1002, mock, 0x103, 0x1003, mock, 0,
-            0, 0, 0
+    #[rustfmt::skip]
+    assert_eq!([
+          0x100, 0x1000, mock, 0,
+          0x101, 0x1001, mock, 0,
+          0x102, 0x1002, mock, 0,
+          0x103, 0x1003, mock, 0,
         ],
-        words.as_slice(),
-        "{words:x?}"
+        words.as_slice(), "{words:x?}"
     );
-    // assert_eq!((0x100, 0x1000, 0), (unit, products, status), "{unit:#016x}, {products:#016x}, {status:#016x}");
 
     println!("checking it isn't completely corrupt...");
     run_until_stop(pid)?;
@@ -226,6 +228,7 @@ struct CraftingLite {
     unit: u32,
     products: u32,
     status: u32,
+    _reserved: u32,
 }
 
 #[repr(C)]

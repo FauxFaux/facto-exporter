@@ -27,6 +27,7 @@ struct CraftingLite {
   uint32_t unit_number;
   uint32_t products_complete;
   uint32_t status;
+  uint32_t _reserved;
 };
 
 struct Shared {

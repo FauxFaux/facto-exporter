@@ -1,9 +1,11 @@
-use super::pad_to_word;
-use super::ptrace::{read_words_arr, read_words_var, run_until_stop, write_words_ptr};
+use std::slice;
+
 use anyhow::{anyhow, ensure, Result};
 use nix::sys::ptrace;
 use nix::unistd::Pid;
-use std::slice;
+
+use super::pad_to_word;
+use super::ptrace::{read_words_arr, read_words_var, run_until_stop, write_words_ptr};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

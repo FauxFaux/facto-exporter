@@ -194,6 +194,28 @@ pub fn find_executable_map(pid: Pid) -> Result<(u64, u64, u64)> {
     bail!("no executable map found");
 }
 
+pub fn debug_to_int3(pid: Pid, base_addr: u64) -> Result<()> {
+    loop {
+        ptrace::step(pid, None)?;
+        wait_for_stop(pid)?;
+        let regs = ptrace::getregs(pid)?;
+        let [word] = read_words_arr(pid, regs.rip)?;
+        println!(
+            "{:#x} (start + {:#x}): {:016x}",
+            regs.rip,
+            regs.rip as i64 - base_addr as i64,
+            word.swap_bytes()
+        );
+
+        // trap was from an int3 (0xcc)
+        if word.to_le_bytes()[0] == 0xcc {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 #[inline]
 fn get_bit(val: c_long, bit: u8) -> bool {
     (val & (1 << bit)) != 0

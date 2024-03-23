@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
-use std::{iter, slice, thread};
+use std::{iter, thread};
 
 use anyhow::Result;
 use facto_exporter::debug::elf::{find_function, full_symbol_table, Symbol};
-use facto_exporter::debug::inject::{inject_mmap, shell_code};
+use facto_exporter::debug::inject::{inject_mmap, CraftingLite, Shell};
 use facto_exporter::debug::pad_to_word;
 use facto_exporter::debug::ptrace::{
-    breakpoint, find_executable_map, read_words_arr, read_words_var, run_until_stop, wait_for_stop,
+    breakpoint, debug_to_int3, find_executable_map, run_until_stop, wait_for_stop,
     which_breakpoints, write_words_ptr,
 };
 use nix::libc::pid_t;
@@ -52,75 +52,26 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     run_until_stop(pid)?;
     assert_eq!([false, false, true, false], which_breakpoints(pid)?);
 
-    let map_addr = inject_mmap(pid, from)?;
     let set_addr = alloc_fake_set(pid, from)?;
 
-    let mut mem = Vec::with_capacity(64);
-
-    let (code, mock_get_status) = shell_code();
-    mem.extend_from_slice(&code);
-    let mock_get_status_addr = map_addr + 8 * mock_get_status;
-
-    let mem_addr = map_addr + 8 * (mem.len() as u64);
-
-    // now, crafting2.c's interface struct, "Shared":
-    // 0-8: pointer to the set, in the real world will be set by code
-    mem.push(set_addr);
-    // 8-16: pointer to the get
-    mem.push(mock_get_status_addr);
-    // 16-24: estimated capacity, based on the size of the mmap from stage1
-    mem.push(60 * 1024 * 1024 / crafting_lite_size);
-    // 24-32: size, set by code
-    mem.push(0);
-    // 32+: data as a list of CraftingLite
-
-    write_words_ptr(pid, map_addr, &mem)?;
+    let shell = Shell::inject_into(pid, from)?;
+    shell.set_set_addr(set_addr)?;
 
     println!("shell written, resuming...");
     run_until_stop(pid)?;
     assert_eq!([false, false, true, false], which_breakpoints(pid)?);
 
     println!("jumping to shell...");
-    let mut regs = ptrace::getregs(pid)?;
-    regs.rip = map_addr;
-    regs.rdi = mem_addr;
-    ptrace::setregs(pid, regs)?;
-    let [word] = read_words_arr(pid, regs.rip)?;
-    println!(
-        "{:#x} (start + 8 + {:#x}): {:16x}",
-        regs.rip,
-        regs.rip as i64 - map_addr as i64 - 8,
-        word.swap_bytes()
-    );
+    shell.enter()?;
 
-    loop {
-        ptrace::step(pid, None)?;
-        wait_for_stop(pid)?;
-        let regs = ptrace::getregs(pid)?;
-        let [word] = read_words_arr(pid, regs.rip)?;
-        println!(
-            "{:#x} (start + 8 + {:#x}): {:16x}",
-            regs.rip,
-            regs.rip as i64 - map_addr as i64 - 8,
-            word.swap_bytes()
-        );
-
-        // trap was from an int3 (0xcc)
-        if word.to_le_bytes()[0] == 0xcc {
-            break;
-        }
-    }
+    debug_to_int3(pid, shell.map_addr)?;
 
     // size
-    let [count] = read_words_arr(pid, mem_addr + 24)?;
-    assert_eq!(4, count, "{count}, {word:#x}");
-    let needed_bytes = crafting_lite_size * count;
-    assert_eq!(crafting_lite_size % 8, 0);
-    let needed_words = needed_bytes / 8;
+    let count = shell.read_count()?;
+    assert_eq!(4, count, "{count}, {count:#x}");
 
-    let words = read_words_var(pid, mem_addr + 32, needed_words as usize)?;
-    let craftings =
-        unsafe { slice::from_raw_parts(words.as_ptr() as *const CraftingLite, count as usize) };
+    let craftings = shell.read_craftings()?;
+    assert_eq!(count, craftings.len());
 
     let mock = 0xf00dd00d;
     let c = |unit, products, status| CraftingLite {
@@ -136,7 +87,7 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
             c(0x102, 0x1002, mock),
             c(0x103, 0x1003, mock),
         ],
-        craftings
+        craftings.as_slice()
     );
 
     println!("checking it isn't completely corrupt...");
@@ -222,15 +173,6 @@ fn test_place() {
     assert_eq!(heap[4], (None, None, 7));
     assert_eq!(heap[5], (Some(3), Some(4), 6));
     assert_eq!(heap[6], (Some(2), Some(5), 4));
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct CraftingLite {
-    unit: u32,
-    products: u32,
-    status: u32,
-    _reserved: u32,
 }
 
 #[repr(C)]

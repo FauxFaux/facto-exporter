@@ -37,7 +37,7 @@ struct Shared {
   size_t capacity;
 
   // out
-  size_t size;
+  size_t count;
   struct CraftingLite crafting[];
 };
 

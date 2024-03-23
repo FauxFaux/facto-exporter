@@ -91,10 +91,19 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     let call_end = pad_to_word(include_bytes!("../shellcode/call-end.bin"), 0xcc);
     assert_eq!(call_end.len(), 1);
 
+    let mock_get_status = pad_to_word(include_bytes!("../shellcode/mock-get-status.bin"), 0xcc);
+    assert_eq!(mock_get_status.len(), 1);
+
     // if this isn't right, call-end.bin needs to learn to jump further forward
     assert_eq!(
         0,
         entry_in_addr(include_str!("../shellcode/crafting2.bin.addr"))?
+    );
+
+    // if this isn't right, mock_get_status_addr needs handling (but it won't change)
+    assert_eq!(
+        0,
+        entry_in_addr(include_str!("../shellcode/mock-get-status.bin.addr"))?
     );
 
     let mut mem = Vec::with_capacity(64);
@@ -106,6 +115,9 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
         0xcc,
     ));
 
+    let mock_get_status_addr = map_addr + 8 * mem.len() as u64;
+    mem.extend_from_slice(&mock_get_status);
+
     let shellcode_fits_in = 1024;
     // padding
     assert!(mem.len() < shellcode_fits_in / 8);
@@ -113,12 +125,12 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
     let mem_addr = map_addr + u64::try_from(shellcode_fits_in).expect("sub-128bit machine please");
 
     // now, crafting2.c's interface struct, "Mem":
-    // 0-8: pointer to the set, set by code, TODO
+    // 0-8: pointer to the set, in the real world will be set by code
     mem.push(set_addr);
-    // 8-16: pointer to the get, TODO
-    mem.push(0x6666666666666666);
-    // 16-24: capacity, based on the size of the mmap from stage1
-    mem.push(60 * 1024 * 1024 / 8);
+    // 8-16: pointer to the get
+    mem.push(mock_get_status_addr);
+    // 16-24: estimated capacity, based on the size of the mmap from stage1
+    mem.push(60 * 1024 * 1024 / 8 / 3);
     // 24-32: size, set by code
     mem.push(0);
     // 32+: data
@@ -153,9 +165,38 @@ fn work(pid: Pid, table: &HashMap<String, Symbol>) -> Result<()> {
             regs.rip as i64 - map_addr as i64 - 8,
             word.swap_bytes()
         );
+
+        // trap was from an int3 (0xcc)
+        if word.to_le_bytes()[0] == 0xcc {
+            break;
+        }
     }
 
-    println!("boing...");
+    // size
+    let [word] = read_words_arr(pid, mem_addr + 24)?;
+    assert_eq!(4, word, "{word}, {word:#x}");
+    let words = read_words_var(pid, mem_addr + 32, 8)?;
+    let words = words
+        .iter()
+        .flat_map(|x| x.to_le_bytes())
+        .collect::<Vec<_>>();
+    let words = words
+        .chunks_exact(4)
+        .map(|x| u32::from_le_bytes(x.try_into().expect("chunks_exact")))
+        .collect::<Vec<_>>();
+
+    let mock = 0xf00dd00d;
+    assert_eq!(
+        [
+            0x100, 0x1000, mock, 0x101, 0x1001, mock, 0x102, 0x1002, mock, 0x103, 0x1003, mock, 0,
+            0, 0, 0
+        ],
+        words.as_slice(),
+        "{words:x?}"
+    );
+    // assert_eq!((0x100, 0x1000, 0), (unit, products, status), "{unit:#016x}, {products:#016x}, {status:#016x}");
+
+    println!("checking it isn't completely corrupt...");
     run_until_stop(pid)?;
 
     Ok(())

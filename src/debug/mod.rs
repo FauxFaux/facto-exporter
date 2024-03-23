@@ -13,8 +13,10 @@ pub fn pad_to_word(buf: &[u8], with: u8) -> Vec<u64> {
         ret.push(u64::from_le_bytes(arr));
     }
     let mut remainder = it.remainder().to_vec();
-    remainder.resize(8, with);
-    let arr = remainder.try_into().expect("remainder");
-    ret.push(u64::from_le_bytes(arr));
+    if !remainder.is_empty() {
+        remainder.resize(8, with);
+        let arr = remainder.try_into().expect("remainder");
+        ret.push(u64::from_le_bytes(arr));
+    }
     ret
 }

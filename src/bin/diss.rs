@@ -1,19 +1,19 @@
-use std::collections::HashMap;
 use std::fs;
 
 use anyhow::{anyhow, Result};
 use cpp_demangle::{DemangleNodeType, DemangleWrite, Symbol};
+use facto_exporter::debug::elf::full_symbol_table;
 use iced_x86::{Decoder, DecoderOptions, Formatter, NasmFormatter};
 
 fn main() -> Result<()> {
-    let bin_path = std::fs::canonicalize(
+    let bin_path = fs::canonicalize(
         std::env::args_os()
             .nth(1)
             .ok_or(anyhow!("usage: bin path"))?,
     )?;
 
-    let bin = fs::read(bin_path)?;
-    let name_to_loc = symbol_table(&bin)?;
+    let name_to_loc = full_symbol_table(&bin_path)?;
+    let bin = fs::read(&bin_path)?;
 
     // TrainsGui::TrainsGui(GuiActionHandler&, Player const&, TrainManager&)
     let args_re = regex::Regex::new(r"(\w+)::~?(\w+)\(((?:\w+[&*]?,? ?)*)\)(?: \[.*?\])?")?;
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
             continue;
         }
         // failure to demangle is normally e.g. C names
-        let name = Symbol::new(name)
+        let name = Symbol::new(&name)
             .map(|s| s.to_string())
             .unwrap_or_else(|_| name.to_string());
         let ca = match args_re.captures(&name) {
@@ -49,6 +49,7 @@ fn main() -> Result<()> {
         if !args.is_empty() {
             continue;
         }
+
         let mut decoder = Decoder::with_ip(64, &bin, loc, DecoderOptions::NONE);
         decoder.set_position(usize::try_from(loc - 0x400000)?)?;
         let mut formatter = NasmFormatter::new();
@@ -67,22 +68,6 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn symbol_table(bin: &[u8]) -> Result<HashMap<&str, (u64, usize)>> {
-    use elf::endian::AnyEndian;
-    use elf::ElfBytes;
-    let bin = ElfBytes::<AnyEndian>::minimal_parse(bin)?;
-    let common = bin.find_common_data()?;
-    let symtab = common.symtab.ok_or(anyhow!("no symtab"))?;
-    let strtab = common.symtab_strs.ok_or(anyhow!("no strtab"))?;
-    let mut symbols = HashMap::with_capacity(symtab.len());
-    for sym in symtab {
-        let name = strtab.get(usize::try_from(sym.st_name)?)?;
-        symbols.insert(name, (sym.st_value, usize::try_from(sym.st_size)?));
-    }
-    symbols.shrink_to_fit();
-    Ok(symbols)
 }
 
 #[allow(dead_code)]

@@ -1,13 +1,14 @@
+use std::hash::Hasher;
 use std::num::NonZeroUsize;
 
 use anyhow::{anyhow, Context, Result};
 use cpp_demangle::{DemangleNodeType, DemangleOptions};
 use cpp_demangle::{DemangleWrite, Symbol};
 use nom::branch::alt;
-use nom::combinator::opt;
-use nom::error::ErrorKind;
+use nom::combinator::{complete, opt};
+use nom::error::{ErrorKind, VerboseError};
 use nom::sequence::{delimited, preceded};
-use nom::{error_position, IResult};
+use nom::{error_position, Finish, IResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -68,8 +69,10 @@ pub fn structured_demangle(sym: &Symbol<&str>) -> Result<Vec<Token>> {
     Ok(s.results)
 }
 
-fn tag(expected: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], Token> {
-    move |input: &[Token]| -> IResult<&[Token], Token> {
+fn tag(
+    expected: Token,
+) -> impl FnMut(&[Token]) -> IResult<&[Token], Token, VerboseError<&[Token]>> {
+    move |input: &[Token]| -> IResult<&[Token], Token, VerboseError<&[Token]>> {
         if input.is_empty() {
             return Err(nom::Err::Incomplete(nom::Needed::Size(
                 NonZeroUsize::new(1).expect("static"),
@@ -84,7 +87,7 @@ fn tag(expected: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], Token> {
     }
 }
 
-fn unqualified_name(input: &[Token]) -> IResult<&[Token], String> {
+fn unqualified_name(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
     delimited(
         tag(Token::Type(DemangleNodeType::UnqualifiedName)),
         label,
@@ -92,14 +95,14 @@ fn unqualified_name(input: &[Token]) -> IResult<&[Token], String> {
     )(input)
 }
 
-fn label(input: &[Token]) -> IResult<&[Token], String> {
+fn label(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
     match input.get(0) {
         Some(Token::Label(s)) => Ok((&input[1..], s.to_string())),
         _ => Err(nom::Err::Error(error_position!(input, ErrorKind::Alpha))),
     }
 }
 
-fn prefix(input: &[Token]) -> IResult<&[Token], String> {
+fn prefix(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
     delimited(
         tag(Token::Type(DemangleNodeType::Prefix)),
         unqualified_name,
@@ -107,7 +110,7 @@ fn prefix(input: &[Token]) -> IResult<&[Token], String> {
     )(input)
 }
 
-fn nested_name(input: &[Token]) -> IResult<&[Token], (String, String)> {
+fn nested_name(input: &[Token]) -> IResult<&[Token], (String, String), VerboseError<&[Token]>> {
     let (input, _) = tag(Token::Type(DemangleNodeType::NestedName))(input)?;
     let (input, prefix) = prefix(input)?;
     let (input, _) = tag(Token::DoubleColon)(input)?;
@@ -116,17 +119,19 @@ fn nested_name(input: &[Token]) -> IResult<&[Token], (String, String)> {
     Ok((input, (prefix, suffix)))
 }
 
-fn space_const(input: &[Token]) -> IResult<&[Token], ()> {
+fn space_const(input: &[Token]) -> IResult<&[Token], (), VerboseError<&[Token]>> {
     let (input, _) = opt(tag(Token::Space))(input)?;
     let (input, _) = opt(tag(Token::Const))(input)?;
     Ok((input, ()))
 }
 
-fn typ(input: &[Token]) -> IResult<&[Token], String> {
+fn typ(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
     alt((unqualified_name, label))(input)
 }
 
-fn arg_list_OF_ONE(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> {
+fn arg_list_OF_ONE(
+    input: &[Token],
+) -> IResult<&[Token], Vec<(String, String)>, VerboseError<&[Token]>> {
     // TODO: delimited by comma or something?
     let (input, name) = typ(input)?;
     let (input, suffix) = opt(alt((tag(Token::Star), tag(Token::Amp))))(input)?;
@@ -141,7 +146,7 @@ fn arg_list_OF_ONE(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> 
     Ok((input, vec![(name, suffix.to_string())]))
 }
 
-fn args(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> {
+fn args(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>, VerboseError<&[Token]>> {
     delimited(
         tag(Token::OpenParen),
         opt(arg_list_OF_ONE),
@@ -150,11 +155,23 @@ fn args(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> {
     .map(|(input, args)| (input, args.unwrap_or_else(Vec::new)))
 }
 
-fn func(input: &[Token]) -> IResult<&[Token], Func> {
+fn opt_tag(tag: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], (), VerboseError<&[Token]>> {
+    move |input: &[Token]| -> IResult<&[Token], (), VerboseError<&[Token]>> {
+        match input.get(0) {
+            Some(t) if t == &tag => Ok((&input[1..], ())),
+            _ => Ok((input, ())),
+        }
+    }
+}
+
+fn func(input: &[Token]) -> IResult<&[Token], Func, VerboseError<&[Token]>> {
     let (input, (p, s)) = nested_name(input)?;
-    let (input, args) = args(input)?;
-    let (input, _) = opt(tag(Token::Space))(input)?;
-    let (input, _) = opt(tag(Token::Const))(input)?;
+    let (mut input, args) = args(input)?;
+    if matches!(input.get(0), Some(Token::Space)) {
+        input = &input[1..];
+    }
+    let (input, _) = opt_tag(Token::Space)(input)?;
+    let (input, _) = opt_tag(Token::Const)(input)?;
     Ok((
         input,
         Func {
@@ -172,7 +189,8 @@ pub struct Func {
 
 pub fn demangle(sym: &Symbol<&str>) -> Result<Func> {
     let tokens = structured_demangle(sym)?;
-    match func(&tokens) {
+    let v = complete(func)(&tokens);
+    match v.finish() {
         Ok((rem, f)) if rem.is_empty() => Ok(f),
         Ok((rem, f)) => {
             Err(anyhow!("leftover tokens: {:#?}", rem)).with_context(|| anyhow!("parsed: {:#?}", f))

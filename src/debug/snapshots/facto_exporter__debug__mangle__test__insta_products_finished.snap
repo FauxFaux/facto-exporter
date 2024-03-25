@@ -1,6 +1,6 @@
 ---
 source: src/debug/mangle.rs
-expression: "demangle(&Symbol::new(\"_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State\").unwrap()).unwrap()"
+expression: "demangle(&Symbol::new(\"_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State\")?)?"
 ---
 Func {
     name: "LuaEntity::luaReadProductsFinished",

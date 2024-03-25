@@ -1,0 +1,17 @@
+---
+source: src/debug/mangle.rs
+expression: "demangle(&Symbol::new(\"_ZNK24CraftingMachinePrototype15canHandleRecipeERK6RecipeRK9ForceData\")?)?"
+---
+Func {
+    name: "CraftingMachinePrototype::canHandleRecipe",
+    args: [
+        (
+            "Recipe",
+            "&",
+        ),
+        (
+            "ForceData",
+            "&",
+        ),
+    ],
+}

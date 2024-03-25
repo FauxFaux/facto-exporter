@@ -7,6 +7,7 @@ use cpp_demangle::{DemangleWrite, Symbol};
 use nom::branch::alt;
 use nom::combinator::{complete, opt};
 use nom::error::{ErrorKind, VerboseError};
+use nom::multi::separated_list0;
 use nom::sequence::{delimited, preceded};
 use nom::{error_position, Finish, IResult};
 
@@ -129,11 +130,9 @@ fn typ(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
     alt((unqualified_name, label))(input)
 }
 
-fn arg_list_OF_ONE(
-    input: &[Token],
-) -> IResult<&[Token], Vec<(String, String)>, VerboseError<&[Token]>> {
-    // TODO: delimited by comma or something?
+fn arg(input: &[Token]) -> IResult<&[Token], (String, String), VerboseError<&[Token]>> {
     let (input, name) = typ(input)?;
+    let (input, _) = space_const(input)?;
     let (input, suffix) = opt(alt((tag(Token::Star), tag(Token::Amp))))(input)?;
 
     let suffix = match suffix {
@@ -143,16 +142,15 @@ fn arg_list_OF_ONE(
         other => todo!("serialisation for {other:#?}"),
     };
 
-    Ok((input, vec![(name, suffix.to_string())]))
+    Ok((input, (name, suffix.to_string())))
+}
+
+fn arg_list(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>, VerboseError<&[Token]>> {
+    separated_list0(tag(Token::Comma), arg)(input)
 }
 
 fn args(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>, VerboseError<&[Token]>> {
-    delimited(
-        tag(Token::OpenParen),
-        opt(arg_list_OF_ONE),
-        tag(Token::CloseParen),
-    )(input)
-    .map(|(input, args)| (input, args.unwrap_or_else(Vec::new)))
+    delimited(tag(Token::OpenParen), arg_list, tag(Token::CloseParen))(input)
 }
 
 fn opt_tag(tag: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], (), VerboseError<&[Token]>> {
@@ -217,6 +215,14 @@ mod test {
     fn insta_unsigned_char() -> Result<()> {
         insta::assert_debug_snapshot!(demangle(&Symbol::new(
             "_ZNK15CraftingMachine16canSortInventoryEh"
+        )?)?);
+        Ok(())
+    }
+
+    #[test]
+    fn insta_multi() -> Result<()> {
+        insta::assert_debug_snapshot!(demangle(&Symbol::new(
+            "_ZNK24CraftingMachinePrototype15canHandleRecipeERK6RecipeRK9ForceData"
         )?)?);
         Ok(())
     }

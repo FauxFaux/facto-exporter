@@ -69,29 +69,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
-#[allow(dead_code)]
-fn structured_demangle() {
-    struct S {
-        d: usize,
-    }
-
-    impl DemangleWrite for S {
-        fn push_demangle_node(&mut self, nt: DemangleNodeType) {
-            println!("{}{nt:?}:", "  ".repeat(self.d));
-            self.d += 1;
-        }
-
-        fn write_string(&mut self, s: &str) -> std::fmt::Result {
-            println!("{}{s:?}", "  ".repeat(self.d));
-            Ok(())
-        }
-
-        fn pop_demangle_node(&mut self) {
-            self.d -= 1;
-        }
-    }
-
-    // println!("{}: {:#x} {:#x}: {}", name, loc, size, sym);
-    // sym.structured_demangle(&mut S { d: 0 }, &DemangleOptions::default())?;
-}

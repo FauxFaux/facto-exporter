@@ -1,6 +1,7 @@
 pub mod elf;
 pub mod inject;
 pub mod ptrace;
+mod mangle;
 
 pub fn pad_to_word(buf: &[u8], with: u8) -> Vec<u64> {
     assert_eq!(std::mem::size_of::<usize>(), 8);

@@ -1,0 +1,13 @@
+---
+source: src/debug/mangle.rs
+expression: "demangle(&Symbol::new(\"_ZNK15CraftingMachine16canSortInventoryEh\")?)?"
+---
+Func {
+    name: "CraftingMachine::canSortInventory",
+    args: [
+        (
+            "unsigned char",
+            "",
+        ),
+    ],
+}

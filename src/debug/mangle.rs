@@ -1,14 +1,16 @@
-use anyhow::Result;
-use cpp_demangle::{DemangleNodeType, DemangleOptions};
-use cpp_demangle::{DemangleWrite, Symbol};
-use nom::combinator::opt;
-use nom::error::ErrorKind;
-use nom::sequence::delimited;
-use nom::{error_position, IResult};
 use std::num::NonZeroUsize;
 
+use anyhow::{anyhow, Context, Result};
+use cpp_demangle::{DemangleNodeType, DemangleOptions};
+use cpp_demangle::{DemangleWrite, Symbol};
+use nom::branch::alt;
+use nom::combinator::opt;
+use nom::error::ErrorKind;
+use nom::sequence::{delimited, preceded};
+use nom::{error_position, IResult};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Token {
+pub enum Token {
     Label(String),
     Type(DemangleNodeType),
     DoubleColon,
@@ -16,6 +18,11 @@ enum Token {
     CloseParen,
     Comma,
     Star,
+    TypeInfo,
+    Space,
+    Const,
+    Amp,
+    Tilde,
 
     End,
 }
@@ -36,7 +43,13 @@ pub fn structured_demangle(sym: &Symbol<&str>) -> Result<Vec<Token>> {
                 ")" => Token::CloseParen,
                 "::" => Token::DoubleColon,
                 "*" => Token::Star,
+                "&" => Token::Amp,
+                "typeinfo name for " => Token::TypeInfo,
+                " " => Token::Space,
+                "const" => Token::Const,
                 "," => Token::Comma,
+                ", " => Token::Comma,
+                "~" => Token::Tilde,
                 _ => Token::Label(s.to_string()),
             });
             Ok(())
@@ -55,8 +68,8 @@ pub fn structured_demangle(sym: &Symbol<&str>) -> Result<Vec<Token>> {
     Ok(s.results)
 }
 
-fn tag(expected: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], ()> {
-    move |input: &[Token]| -> IResult<&[Token], ()> {
+fn tag(expected: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], Token> {
+    move |input: &[Token]| -> IResult<&[Token], Token> {
         if input.is_empty() {
             return Err(nom::Err::Incomplete(nom::Needed::Size(
                 NonZeroUsize::new(1).expect("static"),
@@ -64,7 +77,7 @@ fn tag(expected: Token) -> impl FnMut(&[Token]) -> IResult<&[Token], ()> {
         }
 
         if input[0] == expected {
-            Ok((&input[1..], ()))
+            Ok((&input[1..], expected.clone()))
         } else {
             Err(nom::Err::Error(error_position!(input, ErrorKind::Tag)))
         }
@@ -103,31 +116,45 @@ fn nested_name(input: &[Token]) -> IResult<&[Token], (String, String)> {
     Ok((input, (prefix, suffix)))
 }
 
+fn space_const(input: &[Token]) -> IResult<&[Token], ()> {
+    let (input, _) = opt(tag(Token::Space))(input)?;
+    let (input, _) = opt(tag(Token::Const))(input)?;
+    Ok((input, ()))
+}
+
+fn typ(input: &[Token]) -> IResult<&[Token], String> {
+    alt((unqualified_name, label))(input)
+}
+
 fn arg_list_OF_ONE(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> {
     // TODO: delimited by comma or something?
-    let (input, name) = unqualified_name(input)?;
-    let (input, star) = opt(tag(Token::Star))(input)?;
+    let (input, name) = typ(input)?;
+    let (input, suffix) = opt(alt((tag(Token::Star), tag(Token::Amp))))(input)?;
 
-    Ok((
-        input,
-        vec![(
-            name,
-            star.map_or_else(|| "".to_string(), |_| "*".to_string()),
-        )],
-    ))
+    let suffix = match suffix {
+        Some(Token::Star) => "*",
+        Some(Token::Amp) => "&",
+        None => "",
+        other => todo!("serialisation for {other:#?}"),
+    };
+
+    Ok((input, vec![(name, suffix.to_string())]))
 }
 
 fn args(input: &[Token]) -> IResult<&[Token], Vec<(String, String)>> {
     delimited(
         tag(Token::OpenParen),
-        arg_list_OF_ONE,
+        opt(arg_list_OF_ONE),
         tag(Token::CloseParen),
     )(input)
+    .map(|(input, args)| (input, args.unwrap_or_else(Vec::new)))
 }
 
 fn func(input: &[Token]) -> IResult<&[Token], Func> {
     let (input, (p, s)) = nested_name(input)?;
     let (input, args) = args(input)?;
+    let (input, _) = opt(tag(Token::Space))(input)?;
+    let (input, _) = opt(tag(Token::Const))(input)?;
     Ok((
         input,
         Func {
@@ -138,7 +165,7 @@ fn func(input: &[Token]) -> IResult<&[Token], Func> {
 }
 
 #[derive(Debug)]
-struct Func {
+pub struct Func {
     pub name: String,
     pub args: Vec<(String, String)>,
 }
@@ -146,15 +173,14 @@ struct Func {
 pub fn demangle(sym: &Symbol<&str>) -> Result<Func> {
     let tokens = structured_demangle(sym)?;
     match func(&tokens) {
+        Ok((rem, f)) if rem.is_empty() => Ok(f),
         Ok((rem, f)) => {
-            assert!(rem.is_empty(), "{:#?}", rem);
-            Ok(f)
+            Err(anyhow!("leftover tokens: {:#?}", rem)).with_context(|| anyhow!("parsed: {:#?}", f))
         }
-        Err(e) => {
-            eprintln!("{:?}", e);
-            unimplemented!("{:#?}", tokens);
-        }
+        Err(e) => Err(anyhow!("nom internal: {e:?}")),
     }
+    .with_context(|| anyhow!("input: {:#?}", tokens))
+    .with_context(|| anyhow!("original: {}", sym))
 }
 
 #[cfg(test)]
@@ -162,40 +188,18 @@ mod test {
     use super::*;
 
     #[test]
-    fn mongle() {
-        insta::assert_debug_snapshot!(demangle(
-            &Symbol::new("_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State").unwrap()
-        )
-        .unwrap());
+    fn insta_products_finished() -> Result<()> {
+        insta::assert_debug_snapshot!(demangle(&Symbol::new(
+            "_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State"
+        )?)?);
+        Ok(())
     }
 
     #[test]
-    fn test_structured_demangle() -> Result<()> {
-        let sym = Symbol::new("_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State")?;
-        assert_eq!(
-            [
-                "LuaEntity",
-                "::",
-                "luaReadProductsFinished",
-                "(",
-                "lua_State",
-                "*",
-                ")"
-            ],
-            structured_demangle(&sym)?
-                .into_iter()
-                .filter_map(|s| match s {
-                    // bit garbage
-                    Token::Label(s) => Some(s),
-                    Token::DoubleColon => Some("::".to_string()),
-                    Token::OpenParen => Some("(".to_string()),
-                    Token::CloseParen => Some(")".to_string()),
-                    Token::Comma => Some(",".to_string()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .as_slice()
-        );
+    fn insta_unsigned_char() -> Result<()> {
+        insta::assert_debug_snapshot!(demangle(&Symbol::new(
+            "_ZNK15CraftingMachine16canSortInventoryEh"
+        )?)?);
         Ok(())
     }
 }

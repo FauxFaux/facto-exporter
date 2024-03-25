@@ -3,7 +3,7 @@ source: src/debug/mangle.rs
 expression: "demangle(&Symbol::new(\"_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State\").unwrap()).unwrap()"
 ---
 Func {
-    name: "LuaEntity:::luaReadProductsFinished",
+    name: "LuaEntity::luaReadProductsFinished",
     args: [
         (
             "lua_State",

@@ -6,7 +6,7 @@ use cpp_demangle::{DemangleNodeType, DemangleOptions};
 use cpp_demangle::{DemangleWrite, Symbol};
 use nom::branch::alt;
 use nom::combinator::{complete, opt};
-use nom::error::{ErrorKind, VerboseError};
+use nom::error::{context, ErrorKind, VerboseError};
 use nom::multi::separated_list0;
 use nom::sequence::{delimited, preceded};
 use nom::{error_position, Finish, IResult};
@@ -47,6 +47,7 @@ pub fn structured_demangle(sym: &Symbol<&str>) -> Result<Vec<Token>> {
                 "*" => Token::Star,
                 "&" => Token::Amp,
                 "typeinfo name for " => Token::TypeInfo,
+                "typeinfo for " => Token::TypeInfo,
                 " " => Token::Space,
                 "const" => Token::Const,
                 "," => Token::Comma,
@@ -89,11 +90,11 @@ fn tag(
 }
 
 fn unqualified_name(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
-    delimited(
+    context("unqualified_name", delimited(
         tag(Token::Type(DemangleNodeType::UnqualifiedName)),
         label,
         tag(Token::End),
-    )(input)
+    ))(input)
 }
 
 fn label(input: &[Token]) -> IResult<&[Token], String, VerboseError<&[Token]>> {
@@ -185,8 +186,13 @@ pub struct Func {
     pub args: Vec<(String, String)>,
 }
 
-pub fn demangle(sym: &Symbol<&str>) -> Result<Func> {
-    let tokens = structured_demangle(sym)?;
+pub fn demangle(raw: &str) -> Result<Func> {
+    let hack = raw.replace("Thn208_", "");
+    let hack = hack.strip_suffix(".cold").unwrap_or(&hack);
+    let hack = hack.strip_suffix(".constprop.0").unwrap_or(&hack);
+
+    let sym = Symbol::new(hack)?;
+    let tokens = structured_demangle(&sym)?;
     let v = complete(func)(&tokens);
     match v.finish() {
         Ok((rem, f)) if rem.is_empty() => Ok(f),
@@ -197,6 +203,7 @@ pub fn demangle(sym: &Symbol<&str>) -> Result<Func> {
     }
     .with_context(|| anyhow!("input: {:#?}", tokens))
     .with_context(|| anyhow!("original: {}", sym))
+        .with_context(|| anyhow!("hack: {}", hack))
 }
 
 #[cfg(test)]
@@ -205,25 +212,39 @@ mod test {
 
     #[test]
     fn insta_products_finished() -> Result<()> {
-        insta::assert_debug_snapshot!(demangle(&Symbol::new(
+        insta::assert_debug_snapshot!(demangle(
             "_ZN9LuaEntity23luaReadProductsFinishedEP9lua_State"
-        )?)?);
+        )?);
         Ok(())
     }
 
     #[test]
     fn insta_unsigned_char() -> Result<()> {
-        insta::assert_debug_snapshot!(demangle(&Symbol::new(
-            "_ZNK15CraftingMachine16canSortInventoryEh"
-        )?)?);
+        insta::assert_debug_snapshot!(demangle("_ZNK15CraftingMachine16canSortInventoryEh")?);
         Ok(())
     }
 
     #[test]
     fn insta_multi() -> Result<()> {
-        insta::assert_debug_snapshot!(demangle(&Symbol::new(
+        insta::assert_debug_snapshot!(demangle(
             "_ZNK24CraftingMachinePrototype15canHandleRecipeERK6RecipeRK9ForceData"
-        )?)?);
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn insta_virtual_thunk() -> Result<()> {
+        insta::assert_debug_snapshot!(demangle(
+            "_ZThn208_NK15CraftingMachine17getAllowedEffectsEv"
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn insta_qualified_arg() -> Result<()> {
+        insta::assert_debug_snapshot!(demangle(
+            "_ZN17AssemblingMachine5resetER15InventoryBufferN15CraftingMachine10FromScriptENS_5ForceE"
+        )?);
         Ok(())
     }
 }

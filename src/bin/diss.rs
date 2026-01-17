@@ -1,7 +1,6 @@
 use std::fs;
 
 use anyhow::{anyhow, Context, Result};
-use cpp_demangle::Symbol;
 use facto_exporter::debug::elf::full_symbol_table;
 use facto_exporter::debug::mangle::demangle;
 use iced_x86::{Decoder, DecoderOptions, Formatter, NasmFormatter};
@@ -21,9 +20,8 @@ fn main() -> Result<()> {
             continue;
         }
         // failure to demangle is normally e.g. C names
-        let sym = Symbol::new(name.as_str())?;
-        let func = demangle(&sym).with_context(|| anyhow!("raw: {name:?}"))?;
-        println!("{}: {:#x} {:#x}: {func:?}", sym, loc, size);
+        let func = demangle(&name).with_context(|| anyhow!("raw: {name:?}"))?;
+        println!("{}: {:#x} {:#x}: {func:?}", name, loc, size);
 
         let mut decoder = Decoder::with_ip(64, &bin, loc, DecoderOptions::NONE);
         decoder.set_position(usize::try_from(loc - 0x400000)?)?;

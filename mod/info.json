@@ -1,0 +1,9 @@
+{
+  "name": "facto-exporter",
+  "version": "0.1.0",
+  "title": "Facto Exporter",
+  "author": "Chris West (Faux)",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0"],
+  "description": ""
+}

@@ -1,0 +1,32 @@
+{
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "format": "prettier --log-level warn --write ."
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/static": "^9",
+    "fastify": "^5",
+    "pino": "^10",
+    "pino-pretty": "^13",
+    "serialize-error": "^13.0.1"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2",
+    "@tsconfig/node24": "^24",
+    "@types/node": "^24",
+    "eslint": "^9",
+    "eslint-config-preact": "^2",
+    "factorio-raw-types": "^0.3.1",
+    "preact": "^10",
+    "preact-iso": "^2",
+    "prettier": "~3.8",
+    "typescript": "~5.9",
+    "vite": "^7"
+  },
+  "eslintConfig": {
+    "extends": "preact"
+  }
+}

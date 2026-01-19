@@ -5,12 +5,15 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
 
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "paths": {
       "react": ["./node_modules/preact/compat/"],
       "react-dom": ["./node_modules/preact/compat/"]
-    }
+    },
+    "types": ["vite/client"]
   }
 }

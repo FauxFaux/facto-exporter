@@ -1,15 +1,14 @@
+html {
+  color-scheme: dark;
+}
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: Inter, sans-serif;
   line-height: 1.5;
-  font-weight: 400;
 
   color: #ccc;
   background-color: #1a1a1a;
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -18,54 +17,33 @@ body {
 }
 
 #app {
-  display: flex;
-  flex-direction: column;
   min-height: 100vh;
 }
 
-header {
-  display: flex;
-  justify-content: flex-end;
-  background-color: #673ab8;
+#with-map {
+  display: grid;
+  grid-template-columns: 2fr minmax(0, 1fr) minmax(0, 1fr);
+  height: 99vh;
+  overflow: hidden;
 }
 
-header nav {
-  display: flex;
+#with-map > div {
+  position: relative;
+  width: 100%;
+  height: 100%;
 }
 
-header a {
-  color: #fff;
-  padding: 0.75rem;
-  text-decoration: none;
-}
-
-header a.active {
-  background-color: #0005;
-}
-
-header a:hover {
-  background-color: #0008;
-}
-
-main {
-  flex: auto;
-  display: flex;
-  /*align-items: center;*/
-  max-width: 1280px;
-  margin: 0 auto;
-  text-align: center;
-}
-
-td.num {
-  text-align: right;
-}
-
-td.noted {
-  font-style: italic;
-}
-
-.home {
-  display: flex;
-  flex-direction: row;
-  gap: 1em;
+#with-map svg {
+  border-right: 1px solid white;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    45deg,
+    #4a4411 0,
+    #4a4411 0.4em,
+    #503f18 0,
+    #503f18 0.5em
+  );
+  background-size: 0.5em 0.5em;
 }

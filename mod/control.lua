@@ -24,6 +24,7 @@ end
 
 local function write_assemblers()
     local t = {}
+    -- needs to be per surface
     local xys = {}
     local recps = {}
     for _, surface in pairs(game.surfaces) do

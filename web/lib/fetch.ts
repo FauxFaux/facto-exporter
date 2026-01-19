@@ -24,7 +24,7 @@ export async function fetchJsonInt<T>(
   set: Dispatch<Result<T>>,
 ): Promise<void> {
   try {
-    const resp = await fetch('http://localhost:3113' + path);
+    const resp = await fetch(api(path));
     if (!resp.ok) {
       return set({
         error: new StatusError(path, resp.status),
@@ -42,4 +42,8 @@ export async function fetchJsonInt<T>(
       value: undefined,
     });
   }
+}
+
+export function api(rel: string): string {
+  return (import.meta.env.VITE_API_SERVER ?? '') + rel;
 }

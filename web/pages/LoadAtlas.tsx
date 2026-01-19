@@ -14,6 +14,7 @@ export interface Atlas {
   recps: AssemblersJson['recps'];
   availableImages: Record<string, [number, number][]>;
   recpName: Record<string, string>;
+  entityName: Record<string, string>;
   itemName: (v: IngredientPrototype | ProductPrototype) => string;
 }
 
@@ -24,6 +25,7 @@ export function LoadAtlas({ children }: { children: ComponentChildren }) {
   const [recpNames, setRecpNames] = useState<Result<Locale>>();
   const [itemNames, setItemNames] = useState<Result<Locale>>();
   const [fluidNames, setFluidNames] = useState<Result<Locale>>();
+  const [entityNames, setEntityNames] = useState<Result<Locale>>();
 
   useEffect(() => fetchJson('/script-output/assemblers.json', setAssems), []);
   useEffect(
@@ -38,8 +40,12 @@ export function LoadAtlas({ children }: { children: ComponentChildren }) {
     () => fetchJson('/script-output/fluid-locale.json', setFluidNames),
     [],
   );
+  useEffect(
+    () => fetchJson('/script-output/entity-locale.json', setEntityNames),
+    [],
+  );
 
-  const wanted = [assems, recpNames, itemNames, fluidNames];
+  const wanted = [assems, recpNames, itemNames, fluidNames, entityNames];
   if (!wanted.every((v) => !!v)) {
     return <p>loading {wanted.map((v) => (v ? '?' : '✓'))}...</p>;
   }
@@ -61,6 +67,7 @@ export function LoadAtlas({ children }: { children: ComponentChildren }) {
           nauvis: keysOf(assems!.value!.xys).map((k) => toPair(k)),
         },
         recpName: recpNames!.value!.names,
+        entityName: entityNames!.value!.names,
         itemName: (v: IngredientPrototype | ProductPrototype) => {
           if (v.type === 'fluid') {
             const cand = fluidNames!.value!.names[v.name];

@@ -18,6 +18,13 @@ export const minBy = <T = any>(arr: T[], fn: (v: T) => number) => {
   return arr[mapped.indexOf(min)];
 };
 
+export function ea<T>(v: T[] | Record<string, never> | undefined): T[] {
+  if (Array.isArray(v)) {
+    return v;
+  }
+  return [];
+}
+
 export const debounce = <F extends (...args: Parameters<F>) => ReturnType<F>>(
   func: F,
   waitFor: number,

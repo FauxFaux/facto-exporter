@@ -1,6 +1,6 @@
 import { api } from '../lib/fetch.ts';
 import { UrlState } from '../index.tsx';
-import { Dispatch, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { Setter } from '../lib/ts.ts';
 import { ComponentChildren } from 'preact';
 
@@ -8,14 +8,12 @@ const ZR = 1.2;
 export type Coord = [number, number];
 
 export function SurfaceMap({
-  surface,
   xys,
   us,
   setUs,
   setMG,
   children,
 }: {
-  surface: string;
   xys: [number, number][];
   us: UrlState;
   setUs: Setter<UrlState>;
@@ -28,6 +26,7 @@ export function SurfaceMap({
 
   const { centre, viewWidth: vw } = us;
 
+  // tile-size from the mod? I've already forgotten how all these numbers line up. image width / zoom?
   const H = 256;
   const viewBox = () => {
     const [x, y] = centre;
@@ -87,7 +86,7 @@ export function SurfaceMap({
     >
       {xys.map(([tx, ty]) => (
         <image
-          href={api(`/script-output/assemblers-${surface}-${tx}_${ty}.png`)}
+          href={api(`/script-output/assemblers-${us.surface}-${tx}_${ty}.png`)}
           x={tx * H}
           y={ty * H}
           width={H}

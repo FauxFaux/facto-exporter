@@ -47,3 +47,23 @@ body {
   );
   background-size: 0.5em 0.5em;
 }
+
+.button-group > input {
+  display: none;
+}
+
+.button-group > label {
+  cursor: pointer;
+  padding: 0.5em 1em;
+  border: 1px solid #555;
+  background-color: #222;
+  color: #ccc;
+  margin-right: -1px;
+  user-select: none;
+}
+
+.button-group > input:checked + label {
+  background-color: #c5decc;
+  color: #111;
+  border-bottom: 1px solid #333;
+}

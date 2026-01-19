@@ -38,6 +38,7 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
   const [mg, setMG] = useState([0, 0] as Coord);
 
   useEffect(() => fetchJson('/script-output/assemblers.json', setAss), []);
+  // useEffect(() => fetchJson('/script-output/entity-locale.json', setAss), []);
 
   if (!ass) {
     return <h1>initial data load</h1>;
@@ -46,6 +47,10 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
   if (ass.error) {
     return <h1>erroh: {JSON.stringify(serializeError(ass.error))}</h1>;
   }
+
+  const surfaces = [
+    ...new Set(Object.values(ass.value.t).map((a) => a.surface)),
+  ].sort();
 
   const nearest = minBy(Object.entries(ass.value.t), ([, a]) => {
     const [mx, my] = mg;
@@ -60,6 +65,7 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
   const needsItem = ea(
     ass.value.recps[nearest?.[1]?.recipe ?? '']?.ingredients,
   ).map((i) => i.name);
+
   const producingRecipes = Object.entries(ass.value.recps)
     .filter(([, v]) =>
       ea(v.products)
@@ -72,8 +78,6 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
     .filter((a) => producingRecipes.includes(a.recipe ?? ''))
     .map((a) => a.position);
 
-  // tile-size from the mod? I've already forgotten how all these numbers line up. image width / zoom?
-
   return (
     <div id={'with-map'}>
       <div>
@@ -82,8 +86,6 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
           setUs={setUs}
           setMG={setMG}
           us={us}
-          // TODO
-          surface={'nauvis'}
         >
           {producers.map(([x, y]) => (
             <circle cx={x} cy={y} r={1} fill={'#008'} />
@@ -102,6 +104,21 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
         </SurfaceMap>
       </div>
       <div style={'padding: 1em'}>
+        <form class={'button-group'}>
+          {surfaces.map(
+            /* TODO: onClick */ (id) => (
+              <>
+                <input
+                  name={'surface'}
+                  type={'radio'}
+                  id={'home-sp-' + id}
+                  checked={id === us.surface}
+                />
+                <label for={'home-sp-' + id}>{id}</label>
+              </>
+            ),
+          )}
+        </form>
         <p>
           {Object.values(ass.value.t).length} assemblers,{' '}
           {Object.values(ass.value.recps).length} recipies

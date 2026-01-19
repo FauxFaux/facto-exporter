@@ -2,12 +2,11 @@ import {
   IngredientPrototype,
   ProductPrototype,
 } from 'factorio-raw-types/prototypes';
-import { useEffect, useState } from 'preact/hooks';
-import { fetchJson, Result } from '../lib/fetch.ts';
-import { serializeError } from 'serialize-error';
-import { keysOf, minBy, Setter } from '../lib/ts.ts';
+import { useContext, useState } from 'preact/hooks';
+import { minBy, Setter } from '../lib/ts.ts';
 import { type UrlState } from '../index.tsx';
 import { Coord, SurfaceMap } from './SurfaceMap.tsx';
+import { AtlasContext } from './LoadAtlas.tsx';
 
 interface Assemblers {
   t: Record<
@@ -34,39 +33,29 @@ interface Assemblers {
 }
 
 export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
-  const [ass, setAss] = useState<Result<Assemblers>>();
   const [mg, setMG] = useState([0, 0] as Coord);
-
-  useEffect(() => fetchJson('/script-output/assemblers.json', setAss), []);
-  // useEffect(() => fetchJson('/script-output/entity-locale.json', setAss), []);
-
-  if (!ass) {
-    return <h1>initial data load</h1>;
-  }
-
-  if (ass.error) {
-    return <h1>erroh: {JSON.stringify(serializeError(ass.error))}</h1>;
-  }
+  const { assemblers, recps, availableImages, recpName } =
+    useContext(AtlasContext);
 
   const surfaces = [
-    ...new Set(Object.values(ass.value.t).map((a) => a.surface)),
+    ...new Set(Object.values(assemblers).map((a) => a.surface)),
   ].sort();
 
-  const nearest = minBy(Object.entries(ass.value.t), ([, a]) => {
+  const nearest = minBy(Object.entries(assemblers), ([, a]) => {
     const [mx, my] = mg;
     const [ax, ay] = a.position;
     return Math.pow(mx - ax, 2) + Math.pow(my - ay, 2);
   });
 
-  const sameRecipe = Object.values(ass.value.t)
+  const sameRecipe = Object.values(assemblers)
     .filter((a) => a.recipe === nearest?.[1]?.recipe)
     .map((a) => a.position);
 
-  const needsItem = ea(
-    ass.value.recps[nearest?.[1]?.recipe ?? '']?.ingredients,
-  ).map((i) => i.name);
+  const needsItem = ea(recps[nearest?.[1]?.recipe ?? '']?.ingredients).map(
+    (i) => i.name,
+  );
 
-  const producingRecipes = Object.entries(ass.value.recps)
+  const producingRecipes = Object.entries(recps)
     .filter(([, v]) =>
       ea(v.products)
         .map((p) => p.name)
@@ -74,7 +63,7 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
     )
     .map(([name]) => name);
 
-  const producers = Object.values(ass.value.t)
+  const producers = Object.values(assemblers)
     .filter((a) => producingRecipes.includes(a.recipe ?? ''))
     .map((a) => a.position);
 
@@ -82,7 +71,7 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
     <div id={'with-map'}>
       <div>
         <SurfaceMap
-          xys={keysOf(ass.value.xys).map((v) => toPair(v))}
+          xys={availableImages[us.surface] ?? []}
           setUs={setUs}
           setMG={setMG}
           us={us}
@@ -120,13 +109,17 @@ export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
           )}
         </form>
         <p>
-          {Object.values(ass.value.t).length} assemblers,{' '}
-          {Object.values(ass.value.recps).length} recipies
+          {Object.values(assemblers).length} assemblers,{' '}
+          {Object.values(recps).length} recipies
         </p>
         <p>{JSON.stringify(us)}</p>
       </div>
       <div>
         <p>{JSON.stringify(nearest)}</p>
+        <ul>
+          <li>id: {nearest?.[0]}</li>
+          <li>recipe: {recpName[nearest?.[1]?.recipe ?? '']}</li>
+        </ul>
       </div>
     </div>
   );
@@ -137,10 +130,4 @@ function ea<T>(v: T[] | Record<string, never> | undefined): T[] {
     return v;
   }
   return [];
-}
-
-function toPair(v: `${number}_${number}`): [number, number] {
-  const [a, b, ...o] = v.split('_');
-  if (o.length) throw new Error(`invalid pair: ${v}`);
-  return [Number(a), Number(b)];
 }

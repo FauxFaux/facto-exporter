@@ -4,6 +4,7 @@ import { Home } from './pages/Home.tsx';
 import './style.css';
 import { useEffect, useState } from 'preact/hooks';
 import { debounce } from './lib/ts.ts';
+import { LoadAtlas } from './pages/LoadAtlas.tsx';
 
 export interface UrlState {
   centre: [number, number];
@@ -32,7 +33,11 @@ export function App() {
 
   useEffect(() => setHash(us), [us]);
 
-  return <Home us={us} setUs={setUs} />;
+  return (
+    <LoadAtlas>
+      <Home us={us} setUs={setUs} />
+    </LoadAtlas>
+  );
 }
 
 function packUs(us: UrlState) {

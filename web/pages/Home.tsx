@@ -6,6 +6,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, fetchJson, Result } from '../lib/fetch.ts';
 import { serializeError } from 'serialize-error';
 import { keysOf, minBy } from '../lib/ts.ts';
+import { type UrlState } from '../index.tsx';
 
 interface Assemblers {
   t: Record<
@@ -35,10 +36,15 @@ type Coord = [number, number];
 
 const ZR = 1.2;
 
-export function Home() {
+export function Home({
+  us,
+  setUs,
+}: {
+  us: UrlState;
+  setUs: (f: (us: UrlState) => UrlState) => void;
+}) {
   const [ass, setAss] = useState<Result<Assemblers>>();
-  const [centre, setCentre] = useState([0, 0] as Coord);
-  const [vw, setVW] = useState(400);
+  const { centre, viewWidth: vw } = us;
   const [mg, setMG] = useState([0, 0] as Coord);
   const [dragStart, setDragStart] = useState<undefined | [Coord, Coord]>(
     undefined,
@@ -104,12 +110,18 @@ export function Home() {
             const [cx, cy] = centre;
             const [ncx, ncy] = cursorToGame(ev);
             if (ev.deltaY < 0) {
-              setVW(vw / ZR);
-              setCentre([cx + cf * (ncx - cx), cy + cf * (ncy - cy)]);
+              setUs((us) => ({
+                ...us,
+                viewWidth: vw / ZR,
+                centre: [cx + cf * (ncx - cx), cy + cf * (ncy - cy)],
+              }));
             } else if (ev.deltaY > 0) {
               // not right but closer
-              setCentre([cx - cf * (ncx - cx), cy - cf * (ncy - cy)]);
-              setVW(vw * ZR);
+              setUs((us) => ({
+                ...us,
+                centre: [cx - cf * (ncx - cx), cy - cf * (ncy - cy)],
+                viewWidth: vw * ZR,
+              }));
             }
 
             ev.preventDefault();
@@ -128,8 +140,10 @@ export function Home() {
               const [[ox, oy], [sx, sy]] = dragStart;
               const [nx, ny] = cursorToP(ev);
               const [dx, dy] = [(sx - nx) * vw, (sy - ny) * vw];
-              // console.log({dx, dy, nx, ny, cx: centre[0], cy: centre[1]});
-              setCentre([ox + dx, oy + dy]);
+              setUs((us) => ({
+                ...us,
+                centre: [ox + dx, oy + dy],
+              }));
             }
           }}
         >
@@ -157,11 +171,16 @@ export function Home() {
           }
         </svg>
       </div>
-      <p style={'padding: 1em'}>
-        {Object.values(ass.value.t).length} assemblers,{' '}
-        {Object.values(ass.value.recps).length} recipies
-      </p>
-      <p>{JSON.stringify(nearest)}</p>
+      <div style={'padding: 1em'}>
+        <p>
+          {Object.values(ass.value.t).length} assemblers,{' '}
+          {Object.values(ass.value.recps).length} recipies
+        </p>
+        <p>{JSON.stringify(us)}</p>
+      </div>
+      <div>
+        <p>{JSON.stringify(nearest)}</p>
+      </div>
     </div>
   );
 }

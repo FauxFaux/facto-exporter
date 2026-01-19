@@ -15,3 +15,15 @@ export const minBy = <T = any>(arr: T[], fn: (v: T) => number) => {
   const min = Math.min(...mapped);
   return arr[mapped.indexOf(min)];
 };
+
+export const debounce = <F extends (...args: Parameters<F>) => ReturnType<F>>(
+  func: F,
+  waitFor: number,
+) => {
+  let timeout: NodeJS.Timeout;
+
+  return (...args: Parameters<F>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), waitFor);
+  };
+};

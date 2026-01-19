@@ -1,29 +1,46 @@
 import { render } from 'preact';
-import { LocationProvider, Router, Route } from 'preact-iso';
 
 import { Home } from './pages/Home.tsx';
 import './style.css';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { debounce } from './lib/ts.ts';
 
-export function App() {
-  return (
-    <LocationProvider>
-      <main>
-        <Router>
-          <Route path="/" component={Home} />
-          <Route default component={NotFound} />
-        </Router>
-      </main>
-    </LocationProvider>
-  );
+export interface UrlState {
+  centre: [number, number];
+  viewWidth: number;
 }
 
-function NotFound() {
-  return (
-    <section>
-      <h1>404: Not Found</h1>
-      <p>It's gone :(</p>
-    </section>
-  );
+const setHash = debounce((v: UrlState) => {
+  window.location.hash = packUs(v);
+}, 50);
+
+export function App() {
+  const [us, setUs] = useState<UrlState>({
+    centre: [0, 0],
+    viewWidth: 400,
+  });
+
+  useEffect(() => {
+    window.onhashchange = () => setUs(unpackUs(window.location.hash));
+  }, []);
+
+  useEffect(() => setHash(us), [us]);
+
+  return <Home us={us} setUs={setUs} />;
+}
+
+function packUs(us: UrlState) {
+  const ff = (d: number) => Math.round(d * 100) / 100;
+  return `#${ff(us.centre[0])}#${ff(us.centre[1])}#${ff(us.viewWidth)}`;
+}
+
+function unpackUs(hash: string): UrlState {
+  const parts = hash.split('#');
+  const [cx, cy, vw] = parts.slice(1, 4).map(Number);
+  return {
+    centre: [cx || 0, cy || 0],
+    viewWidth: vw || 400,
+  };
 }
 
 render(<App />, document.getElementById('app')!);

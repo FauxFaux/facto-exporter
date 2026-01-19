@@ -3,10 +3,11 @@ import {
   ProductPrototype,
 } from 'factorio-raw-types/prototypes';
 import { useEffect, useState } from 'preact/hooks';
-import { api, fetchJson, Result } from '../lib/fetch.ts';
+import { fetchJson, Result } from '../lib/fetch.ts';
 import { serializeError } from 'serialize-error';
-import { keysOf, minBy } from '../lib/ts.ts';
+import { keysOf, minBy, Setter } from '../lib/ts.ts';
 import { type UrlState } from '../index.tsx';
+import { Coord, SurfaceMap } from './SurfaceMap.tsx';
 
 interface Assemblers {
   t: Record<
@@ -32,23 +33,9 @@ interface Assemblers {
   xys: Record<`${number}_${number}`, never>;
 }
 
-type Coord = [number, number];
-
-const ZR = 1.2;
-
-export function Home({
-  us,
-  setUs,
-}: {
-  us: UrlState;
-  setUs: (f: (us: UrlState) => UrlState) => void;
-}) {
+export function Home({ us, setUs }: { us: UrlState; setUs: Setter<UrlState> }) {
   const [ass, setAss] = useState<Result<Assemblers>>();
-  const { centre, viewWidth: vw } = us;
   const [mg, setMG] = useState([0, 0] as Coord);
-  const [dragStart, setDragStart] = useState<undefined | [Coord, Coord]>(
-    undefined,
-  );
 
   useEffect(() => fetchJson('/script-output/assemblers.json', setAss), []);
 
@@ -86,75 +73,18 @@ export function Home({
     .map((a) => a.position);
 
   // tile-size from the mod? I've already forgotten how all these numbers line up. image width / zoom?
-  const H = 256;
-  const availImages = keysOf(ass.value.xys).map((v) => toPair(v));
-
-  const viewBox = () => {
-    const [x, y] = centre;
-    return `${x - vw / 2} ${y - vw / 2} ${vw} ${vw}`;
-  };
-
-  function cursorToGame(ev: MouseEventWithTarget): Coord {
-    const [px, py] = cursorToP(ev);
-    const [cx, cy] = centre;
-    return [px * vw + cx, py * vw + cy];
-  }
 
   return (
     <div id={'with-map'}>
       <div>
-        <svg
-          viewBox={viewBox()}
-          onWheel={(ev) => {
-            const cf = 1 - 1 / ZR;
-            const [cx, cy] = centre;
-            const [ncx, ncy] = cursorToGame(ev);
-            if (ev.deltaY < 0) {
-              setUs((us) => ({
-                ...us,
-                viewWidth: vw / ZR,
-                centre: [cx + cf * (ncx - cx), cy + cf * (ncy - cy)],
-              }));
-            } else if (ev.deltaY > 0) {
-              // not right but closer
-              setUs((us) => ({
-                ...us,
-                centre: [cx - cf * (ncx - cx), cy - cf * (ncy - cy)],
-                viewWidth: vw * ZR,
-              }));
-            }
-
-            ev.preventDefault();
-          }}
-          onMouseDown={(ev) => {
-            // if (ev.shiftKey || ev.altKey) {
-            setDragStart([centre, cursorToP(ev)]);
-            ev.preventDefault();
-            // }
-          }}
-          onMouseUp={() => setDragStart(undefined)}
-          onMouseLeave={() => setDragStart(undefined)}
-          onMouseMove={(ev) => {
-            setMG(cursorToGame(ev));
-            if (dragStart) {
-              const [[ox, oy], [sx, sy]] = dragStart;
-              const [nx, ny] = cursorToP(ev);
-              const [dx, dy] = [(sx - nx) * vw, (sy - ny) * vw];
-              setUs((us) => ({
-                ...us,
-                centre: [ox + dx, oy + dy],
-              }));
-            }
-          }}
+        <SurfaceMap
+          xys={keysOf(ass.value.xys).map((v) => toPair(v))}
+          setUs={setUs}
+          setMG={setMG}
+          us={us}
+          // TODO
+          surface={'nauvis'}
         >
-          {availImages.map(([tx, ty]) => (
-            <image
-              href={api(`/script-output/assemblers-nauvis-${tx}_${ty}.png`)}
-              x={tx * H}
-              y={ty * H}
-              width={H}
-            />
-          ))}
           {producers.map(([x, y]) => (
             <circle cx={x} cy={y} r={1} fill={'#008'} />
           ))}
@@ -169,7 +99,7 @@ export function Home({
               fill={'#0f0'}
             />
           }
-        </svg>
+        </SurfaceMap>
       </div>
       <div style={'padding: 1em'}>
         <p>
@@ -183,24 +113,6 @@ export function Home({
       </div>
     </div>
   );
-}
-
-type MouseEventWithTarget = Omit<MouseEvent, 'currentTarget'> & {
-  readonly currentTarget: Element;
-};
-
-function cursorToP(ev: MouseEventWithTarget): Coord {
-  const box = ev.currentTarget.getBoundingClientRect();
-  let px = (ev.clientX - box.left) / box.width - 0.5;
-  let py = (ev.clientY - box.top) / box.height - 0.5;
-
-  // aspect ratio correction
-  if (box.width < box.height) {
-    py *= box.height / box.width;
-  } else {
-    px *= box.width / box.height;
-  }
-  return [px, py];
 }
 
 function ea<T>(v: T[] | Record<string, never> | undefined): T[] {

@@ -1,3 +1,5 @@
+import { Dispatch, StateUpdater } from 'preact/hooks';
+
 export const keysOf = Object.keys as <T extends object>(
   obj: T,
 ) => Array<keyof T>;
@@ -27,3 +29,5 @@ export const debounce = <F extends (...args: Parameters<F>) => ReturnType<F>>(
     timeout = setTimeout(() => func(...args), waitFor);
   };
 };
+
+export type Setter<S> = Dispatch<StateUpdater<S>>;

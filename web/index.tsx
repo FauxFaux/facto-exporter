@@ -5,6 +5,7 @@ import './style.css';
 import { useEffect, useState } from 'preact/hooks';
 import { debounce } from './lib/ts.ts';
 import { LoadAtlas } from './pages/LoadAtlas.tsx';
+import { WatchProduction } from './pages/WatchProduction.tsx';
 
 export interface UrlState {
   centre: [number, number];
@@ -35,7 +36,9 @@ export function App() {
 
   return (
     <LoadAtlas>
-      <Home us={us} setUs={setUs} />
+      <WatchProduction>
+        <Home us={us} setUs={setUs} />
+      </WatchProduction>
     </LoadAtlas>
   );
 }

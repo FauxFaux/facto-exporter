@@ -33,7 +33,7 @@ body {
   height: 100%;
 }
 
-#with-map svg {
+#with-map > div > svg {
   border-right: 1px solid white;
   position: absolute;
   width: 100%;

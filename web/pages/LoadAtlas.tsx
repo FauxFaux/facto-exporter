@@ -21,6 +21,7 @@ export interface Atlas {
 export const AtlasContext = createContext<Atlas>(null as unknown as Atlas);
 
 export function LoadAtlas({ children }: { children: ComponentChildren }) {
+  // this does not need to be different states
   const [assems, setAssems] = useState<Result<AssemblersJson>>();
   const [recpNames, setRecpNames] = useState<Result<Locale>>();
   const [itemNames, setItemNames] = useState<Result<Locale>>();
